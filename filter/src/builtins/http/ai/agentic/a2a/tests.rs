@@ -595,14 +595,13 @@ async fn batch_rejected_even_with_on_invalid_continue() {
     let mut ctx = crate::test_utils::make_filter_context(&req);
     let mut body = Some(Bytes::from(body_str));
 
-    // A2A routing is a single classification decision per HTTP request. A
-    // batch can contain mixed methods, task IDs, and streaming semantics, so
-    // reject it even when invalid non-A2A requests otherwise pass through.
     let action = filter.on_request_body(&mut ctx, &mut body, true).await.unwrap();
 
     assert!(
         matches!(action, FilterAction::Reject(_)),
-        "batch should be rejected regardless of on_invalid"
+        "batch should be rejected regardless of on_invalid: \
+         A2A routing is a single classification decision per request, \
+         and batches can contain mixed methods/task IDs/streaming semantics"
     );
 }
 
