@@ -1,0 +1,77 @@
+# CPEX Security Filter
+#
+# Embeds the CPEX policy runtime in-process to enforce multi-source
+# JWT identity, APL route policy, RFC 8693 OAuth 2.0 token exchange,
+# PII scanning, audit emission, and (under `body_access: read_write`)
+# request / response body rewriting.
+#
+# The cpex filter consumes `mcp.method` / `mcp.name` metadata stashed
+# by praxis's built-in `mcp` filter, which MUST be ordered before it
+# in the chain.
+#
+# `config_path` points at the CPEX policy YAML — plugins + routes —
+# which the filter loads once at construction. The example policy file
+# at `cpex-policy.yaml` declares a single HS256 identity plugin and
+# nothing else, so the filter accepts any valid bearer JWT and passes
+# the request through to the upstream. Real deployments add routes,
+# Cedar PDPs, and delegators in the policy file.
+#
+# `require_mcp_metadata: true` (the default) fail-closes when the
+# `mcp` filter is missing or ordered after `cpex` — this guards
+# against a misconfigured chain silently bypassing policy.
+#
+# This example builds only when the `cpex` cargo feature is enabled:
+#
+#   cargo run --features cpex -p praxis -- \
+#     -c examples/configs/security/cpex.yaml
+#
+# Exercise (assumes the backend at :3000 echoes 200):
+#
+#   # Missing Authorization → 401 with WWW-Authenticate and
+#   # X-Cpex-Violation header:
+#   curl -i -X POST http://localhost:8080/mcp \
+#     -H "Content-Type: application/json" \
+#     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+#          "params":{"name":"echo","arguments":{}}}'
+#
+#   # Token rejected by HS256 signature mismatch → 401:
+#   curl -i -X POST http://localhost:8080/mcp \
+#     -H "Authorization: Bearer bogus.token.bytes" \
+#     -H "Content-Type: application/json" \
+#     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+#          "params":{"name":"echo","arguments":{}}}'
+#
+# The companion `cpex-policy.yaml` ships with a placeholder shared
+# secret — replace it before doing anything beyond local
+# experimentation.
+
+listeners:
+  - name: default
+    address: "127.0.0.1:8080"
+    filter_chains:
+      - main
+
+filter_chains:
+  - name: main
+    filters:
+      - filter: mcp
+        # Default mode parses MCP JSON-RPC bodies and stashes
+        # mcp.method / mcp.name in filter_metadata. Must precede cpex.
+
+      - filter: cpex
+        config_path: examples/configs/security/cpex-policy.yaml
+        # Fail-closed when mcp.method is missing. Set to `false` only
+        # when intentionally fronting non-MCP traffic through cpex for
+        # identity-only enforcement.
+        require_mcp_metadata: true
+
+      - filter: router
+        routes:
+          - path_prefix: "/"
+            cluster: backend
+
+      - filter: load_balancer
+        clusters:
+          - name: backend
+            endpoints:
+              - "127.0.0.1:3000"

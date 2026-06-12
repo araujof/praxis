@@ -17,6 +17,8 @@ mod basic_reverse_proxy;
 mod canary_routing;
 mod circuit_breaker;
 mod conditional_filters;
+#[cfg(feature = "cpex")]
+mod cpex;
 mod credential_injection;
 mod csrf;
 mod default_config;

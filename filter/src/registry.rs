@@ -120,6 +120,8 @@ fn register_http_builtins(factories: &mut HashMap<String, FilterFactory>) {
     register_http(factories, "circuit_breaker", CircuitBreakerFilter::from_config);
     register_http(factories, "compression", CompressionFilter::from_config);
     register_http(factories, "cors", CorsFilter::from_config);
+    #[cfg(feature = "cpex")]
+    register_http(factories, "cpex", crate::CpexFilter::from_config);
     register_http(factories, "csrf", CsrfFilter::from_config);
     register_http(
         factories,

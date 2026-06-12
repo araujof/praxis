@@ -43,6 +43,8 @@ pub use builtins::PromptEnrichFilter;
 pub use builtins::ResponseStoreRegistry;
 #[cfg(feature = "ai-inference")]
 pub use builtins::ResponsesFormatFilter;
+#[cfg(feature = "cpex")]
+pub use builtins::CpexFilter;
 pub use builtins::{
     CircuitBreakerFilter, ContainsValue, CredentialInjectionFilter, DisallowedOriginMode, GuardrailsAction,
     GuardrailsFilter, LoadBalancerFilter, PiiKind, RateLimitMode, RedirectStatus, RouterFilter, RuleTargetKind,

@@ -129,6 +129,7 @@ page.
 | File | Description |
 | ------ | ------------- |
 | [cors.yaml](configs/security/cors.yaml) | Spec-compliant CORS filter with preflight handling, origin validation, and credential support |
+| [cpex.yaml](configs/security/cpex.yaml) | CPEX policy filter — multi-source JWT identity, APL routes, RFC 8693 delegation, PII scanning, audit, body rewriting (requires `--features cpex`) |
 | [csrf.yaml](configs/security/csrf.yaml) | Cross-site request forgery protection via origin validation |
 | [downstream-read-timeout.yaml](configs/security/downstream-read-timeout.yaml) | Protects against slow client attacks by limiting how long the proxy waits for data from downstream clients |
 | [forwarded-headers.yaml](configs/security/forwarded-headers.yaml) | Injects X-Forwarded-For, X-Forwarded-Proto, and X-Forwarded-Host into upstream requests |

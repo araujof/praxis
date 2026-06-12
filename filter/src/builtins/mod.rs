@@ -28,6 +28,8 @@ pub use http::ResponseStoreFilter;
 pub use http::ResponseStoreRegistry;
 #[cfg(feature = "ai-inference")]
 pub use http::ResponsesFormatFilter;
+#[cfg(feature = "cpex")]
+pub use http::CpexFilter;
 pub use http::{
     A2aFilter, AccessLogFilter, CircuitBreakerFilter, CompressionFilter, ContainsValue, CorsFilter,
     CredentialInjectionFilter, CsrfFilter, DisallowedOriginMode, ForwardedHeadersFilter, GrpcDetectionFilter,
