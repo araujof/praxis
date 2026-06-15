@@ -35,7 +35,7 @@ pub struct CpexFilterConfig {
     pub config_path: String,
 
     /// Body-access tier. `ReadOnly` (default) lets APL inspect request
-    /// + response bodies for routing / policy decisions but discards
+    /// and response bodies for routing / policy decisions but discards
     /// any mutations. `ReadWrite` enables the CMF → JSON-RPC
     /// re-serialization round-trip so APL field mutators
     /// (e.g. `args.ssn: redact(!perm.view_ssn)`) rewrite the upstream

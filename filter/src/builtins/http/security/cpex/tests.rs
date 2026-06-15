@@ -14,11 +14,12 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::config::CpexFilterConfig;
-use super::filter::CpexFilter;
-use crate::FilterAction;
-use crate::filter::HttpFilter;
-use crate::test_utils::{make_filter_context, make_request};
+use super::{config::CpexFilterConfig, filter::CpexFilter};
+use crate::{
+    FilterAction,
+    filter::HttpFilter,
+    test_utils::{make_filter_context, make_request},
+};
 
 // =====================================================================
 // Fixtures
@@ -183,10 +184,7 @@ fn build_filter(config_path: String) -> CpexFilter {
 fn config_parses_minimal_yaml() {
     let yaml = "config_path: /etc/praxis/cpex.yaml";
     let cfg: CpexFilterConfig = serde_yaml::from_str(yaml).expect("parse");
-    assert_eq!(
-        cfg.config_path, "/etc/praxis/cpex.yaml",
-        "config_path round-trips",
-    );
+    assert_eq!(cfg.config_path, "/etc/praxis/cpex.yaml", "config_path round-trips",);
 }
 
 /// `config_path:` is mandatory — there's no default that would let
@@ -377,10 +375,7 @@ config_path: /etc/praxis/cpex.yaml
 body_acces: read_write
 ";
     let res: Result<CpexFilterConfig, _> = serde_yaml::from_str(yaml);
-    assert!(
-        res.is_err(),
-        "deny_unknown_fields must reject `body_acces` typo",
-    );
+    assert!(res.is_err(), "deny_unknown_fields must reject `body_acces` typo",);
     let msg = format!("{}", res.unwrap_err());
     assert!(
         msg.contains("body_acces") || msg.contains("unknown field"),
@@ -465,7 +460,7 @@ async fn missing_mcp_metadata_rejects_when_required() {
                 "config.missing_mcp_metadata",
                 "violation code should name the missing metadata",
             );
-        }
+        },
         other => panic!("expected Reject(500); got {other:?}"),
     }
 }
@@ -512,15 +507,15 @@ async fn missing_mcp_metadata_passes_when_not_required() {
 /// parse it the same way they parse upstream errors.
 #[test]
 fn mcp_error_envelope_has_expected_shape() {
-    use super::error::mcp_error_envelope_bytes;
     use cpex_core::error::PluginViolation;
+
+    use super::error::mcp_error_envelope_bytes;
 
     let violation = PluginViolation::new("test.deny", "policy says no");
     let id = serde_json::json!(42);
     let bytes = mcp_error_envelope_bytes(Some(&violation), &id);
 
-    let parsed: serde_json::Value =
-        serde_json::from_slice(&bytes).expect("envelope must be valid JSON");
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("envelope must be valid JSON");
 
     assert_eq!(parsed["jsonrpc"], "2.0");
     assert_eq!(parsed["id"], 42);
@@ -563,8 +558,9 @@ fn mcp_error_envelope_handles_missing_violation() {
 /// short `code: reason` diagnostic.
 #[test]
 fn auth_rejection_shape_when_violation_present() {
-    use super::error::auth_rejection;
     use cpex_core::error::PluginViolation;
+
+    use super::error::auth_rejection;
 
     let violation = PluginViolation::new("auth.invalid_token", "bad signature");
     let rej = auth_rejection(Some(&violation));
@@ -637,18 +633,19 @@ fn fit_to_original_length_passes_through_on_equal() {
     assert_eq!(out, new);
 }
 
-/// On grow, the rewrite passes through and praxis ships the larger body.
-/// This risks HTTP/1.1 framing desync (praxis can't recompute
-/// `Content-Length` from the body phase yet) but dropping the rewrite
-/// is worse for the deny-replacement case. The escape hatch logs a
-/// warning via tracing; the test pins only the byte-equality behavior.
+/// On grow, the body is truncated to exactly the original
+/// `Content-Length`. The downstream response length is already committed
+/// by the time `on_response_body` runs, so emitting more bytes would let
+/// the overflow be parsed as the next response (a smuggling primitive).
+/// Truncation corrupts the JSON but preserves HTTP/1.1 framing — the
+/// safe failure mode.
 #[test]
-fn fit_to_original_length_passes_through_on_grow() {
+fn fit_to_original_length_truncates_on_grow() {
     use super::filter::fit_to_original_length;
     let new = bytes::Bytes::from_static(b"a much longer rewritten payload");
     let out = fit_to_original_length(new.clone(), 4, "tools/call", "test");
-    assert_eq!(out, new);
-    assert!(out.len() > 4, "grow path must not truncate");
+    assert_eq!(out.len(), 4, "grow path must truncate to the original length");
+    assert_eq!(&out[..], &new[..4], "truncation keeps the leading bytes");
 }
 
 // =====================================================================
@@ -718,8 +715,9 @@ fn json_rpc_id_value_preserves_json_type() {
 /// part so APL `args.<field>` predicates have something to read.
 #[test]
 fn build_content_for_method_tools_call() {
-    use super::json_rpc::build_content_for_method;
     use cpex_core::cmf::ContentPart;
+
+    use super::json_rpc::build_content_for_method;
 
     let body = bytes::Bytes::from_static(
         br#"{"jsonrpc":"2.0","id":1,"method":"tools/call",
@@ -733,7 +731,7 @@ fn build_content_for_method_tools_call() {
             assert_eq!(content.tool_call_id, "corr-1");
             assert_eq!(content.arguments.get("text"), Some(&serde_json::json!("hi")));
             assert_eq!(content.arguments.get("n"), Some(&serde_json::json!(7)));
-        }
+        },
         other => panic!("expected ToolCall; got {other:?}"),
     }
 }
@@ -742,8 +740,9 @@ fn build_content_for_method_tools_call() {
 /// so route resolution and APL `resource.*` predicates work.
 #[test]
 fn build_content_for_method_resources_read() {
-    use super::json_rpc::build_content_for_method;
     use cpex_core::cmf::ContentPart;
+
+    use super::json_rpc::build_content_for_method;
 
     let body = bytes::Bytes::from_static(
         br#"{"jsonrpc":"2.0","id":1,"method":"resources/read",
@@ -755,7 +754,7 @@ fn build_content_for_method_resources_read() {
         ContentPart::ResourceRef { content } => {
             assert_eq!(content.uri, "file:///etc/example");
             assert_eq!(content.resource_request_id, "corr-1");
-        }
+        },
         other => panic!("expected ResourceRef; got {other:?}"),
     }
 }
@@ -777,15 +776,15 @@ fn build_content_for_method_unknown_method_yields_empty() {
 /// APL actually mutated.
 #[test]
 fn reserialize_tools_call_round_trips_with_mutated_args() {
-    use super::json_rpc::reserialize_json_rpc_body;
     use cpex_core::cmf::{ContentPart, Message, Role, ToolCall};
+
+    use super::json_rpc::reserialize_json_rpc_body;
 
     let original = bytes::Bytes::from_static(
         br#"{"jsonrpc":"2.0","id":1,"method":"tools/call",
              "params":{"name":"echo","arguments":{"a":1}}}"#,
     );
-    let mut new_args: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
+    let mut new_args: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
     new_args.insert("a".to_owned(), serde_json::json!("[REDACTED]"));
     let message = Message::with_content(
         Role::User,
@@ -798,8 +797,7 @@ fn reserialize_tools_call_round_trips_with_mutated_args() {
             },
         }],
     );
-    let new_bytes =
-        reserialize_json_rpc_body(&original, "tools/call", &message).expect("rewrite Some");
+    let new_bytes = reserialize_json_rpc_body(&original, "tools/call", &message).expect("rewrite Some");
     let parsed: serde_json::Value = serde_json::from_slice(&new_bytes).expect("valid JSON");
     assert_eq!(parsed["jsonrpc"], "2.0");
     assert_eq!(parsed["id"], 1);
@@ -814,8 +812,9 @@ fn reserialize_tools_call_round_trips_with_mutated_args() {
 /// `isError` flag round-trips.
 #[test]
 fn build_response_content_for_method_text_fallback() {
-    use super::json_rpc::build_response_content_for_method;
     use cpex_core::cmf::ContentPart;
+
+    use super::json_rpc::build_response_content_for_method;
 
     let body = bytes::Bytes::from_static(
         br#"{"jsonrpc":"2.0","id":1,"result":{
@@ -828,7 +827,7 @@ fn build_response_content_for_method_text_fallback() {
         ContentPart::ToolResult { content } => {
             assert!(!content.is_error);
             assert_eq!(content.content, serde_json::json!({"k":"v"}));
-        }
+        },
         other => panic!("expected ToolResult; got {other:?}"),
     }
 }
@@ -837,8 +836,9 @@ fn build_response_content_for_method_text_fallback() {
 /// when present (newer MCP shape).
 #[test]
 fn build_response_content_for_method_prefers_structured_content() {
-    use super::json_rpc::build_response_content_for_method;
     use cpex_core::cmf::ContentPart;
+
+    use super::json_rpc::build_response_content_for_method;
 
     let body = bytes::Bytes::from_static(
         br#"{"jsonrpc":"2.0","id":1,"result":{
@@ -852,9 +852,103 @@ fn build_response_content_for_method_prefers_structured_content() {
         ContentPart::ToolResult { content } => {
             assert!(content.is_error);
             assert_eq!(content.content, serde_json::json!({"hi":"there"}));
-        }
+        },
         other => panic!("expected ToolResult; got {other:?}"),
     }
+}
+
+/// Response-side: when `result.content` has MULTIPLE text blocks and no
+/// `structuredContent`, every block must end up in APL's view — not just
+/// the first. Otherwise a later block carries data the policy never
+/// inspected and the re-serializer never rewrites, leaking it. The
+/// folded view exposes all blocks under `text`.
+#[test]
+fn build_response_content_for_method_folds_all_text_blocks() {
+    use cpex_core::cmf::ContentPart;
+
+    use super::json_rpc::build_response_content_for_method;
+
+    let body = bytes::Bytes::from_static(
+        br#"{"jsonrpc":"2.0","id":1,"result":{
+             "content":[
+               {"type":"text","text":"first secret"},
+               {"type":"text","text":"second secret"}
+             ],
+             "isError":false}}"#,
+    );
+    let parts = build_response_content_for_method("tools/call", "echo", "corr-1", &body);
+    assert_eq!(parts.len(), 1);
+    match &parts[0] {
+        ContentPart::ToolResult { content } => {
+            let text = content.content["text"].as_str().expect("text field present");
+            assert!(
+                text.contains("first secret") && text.contains("second secret"),
+                "folded view must include every text block; got {text:?}",
+            );
+        },
+        other => panic!("expected ToolResult; got {other:?}"),
+    }
+}
+
+/// Response-side emit: when APL mutates the result, the entire
+/// `result.content` array is collapsed to a single canonical text block
+/// holding the vetted payload. Any other blocks (extra text, non-text)
+/// are dropped so nothing the policy didn't vet survives, and
+/// `structuredContent` is mirrored when the original had it.
+#[test]
+fn reserialize_response_collapses_to_single_vetted_block() {
+    use cpex_core::cmf::{ContentPart, Message, Role, ToolResult};
+
+    use super::json_rpc::reserialize_json_rpc_response_body;
+
+    let original = bytes::Bytes::from_static(
+        br#"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"old one"},{"type":"text","text":"old two"},{"type":"image","data":"B64","mimeType":"image/png"}],"structuredContent":{"ssn":"555-12-3456"},"isError":false}}"#,
+    );
+    let vetted = serde_json::json!({ "ssn": "[REDACTED]" });
+    let message = Message::with_content(
+        Role::Assistant,
+        vec![ContentPart::ToolResult {
+            content: ToolResult {
+                tool_call_id: String::new(),
+                tool_name: "echo".to_owned(),
+                content: vetted.clone(),
+                is_error: false,
+            },
+        }],
+    );
+    let out = reserialize_json_rpc_response_body(&original, "tools/call", &message).expect("Some");
+    let parsed: serde_json::Value = serde_json::from_slice(&out).expect("valid JSON");
+    let content = parsed["result"]["content"].as_array().expect("content array");
+    assert_eq!(content.len(), 1, "extra blocks must be dropped; got {content:?}");
+    let inner: serde_json::Value =
+        serde_json::from_str(content[0]["text"].as_str().expect("text")).expect("vetted JSON");
+    assert_eq!(inner, vetted, "emitted block must hold exactly the vetted value");
+    assert_eq!(
+        parsed["result"]["structuredContent"], vetted,
+        "structuredContent mirrors vetted"
+    );
+}
+
+/// Fail-closed sizing: a deny envelope substituted on the
+/// response-rewrite-overflow / identity-failure paths is fitted to the
+/// committed `Content-Length` — never longer. Pins the composition the
+/// filter relies on so an oversized rewrite can never become a framing
+/// desync.
+#[test]
+fn deny_envelope_fits_committed_length() {
+    use cpex_core::error::PluginViolation;
+
+    use super::{error::mcp_error_envelope_bytes, filter::fit_to_original_length};
+
+    let violation = PluginViolation::new("gateway.response_rewrite_overflow", "too large to fit");
+    let envelope = mcp_error_envelope_bytes(Some(&violation), &serde_json::json!(1));
+    let original_len = envelope.len() + 64;
+    let fitted = fit_to_original_length(envelope, original_len, "tools/call", "overflow");
+    assert_eq!(
+        fitted.len(),
+        original_len,
+        "deny envelope must be padded to exactly the committed length",
+    );
 }
 
 // =====================================================================
@@ -907,7 +1001,7 @@ async fn on_request_body_continues_on_partial_chunks() {
     let mut ctx = make_filter_context(&req);
     let mut chunk = Some(bytes::Bytes::from_static(br#"{"jsonrpc":"2.0""#));
     let action = filter
-        .on_request_body(&mut ctx, &mut chunk, /*end_of_stream=*/ false)
+        .on_request_body(&mut ctx, &mut chunk, /* end_of_stream= */ false)
         .await
         .expect("filter ran");
     assert!(
@@ -933,7 +1027,7 @@ fn on_response_body_in_read_only_is_a_no_op() {
     let mut ctx = make_filter_context(&req);
     let mut body = Some(bytes::Bytes::from_static(b"some upstream body"));
     let action = filter
-        .on_response_body(&mut ctx, &mut body, /*end_of_stream=*/ true)
+        .on_response_body(&mut ctx, &mut body, /* end_of_stream= */ true)
         .expect("hook ran");
     assert!(
         matches!(action, FilterAction::Continue),
@@ -956,7 +1050,7 @@ fn on_response_body_continues_on_partial_chunks() {
     let mut ctx = make_filter_context(&req);
     let mut chunk = Some(bytes::Bytes::from_static(b"partial"));
     let action = filter
-        .on_response_body(&mut ctx, &mut chunk, /*end_of_stream=*/ false)
+        .on_response_body(&mut ctx, &mut chunk, /* end_of_stream= */ false)
         .expect("hook ran");
     assert!(matches!(action, FilterAction::Continue));
 }
@@ -976,29 +1070,19 @@ fn on_response_body_continues_on_partial_chunks() {
 #[test]
 #[allow(clippy::too_many_lines, reason = "test fixture construction")]
 fn attach_delegated_tokens_first_writer_wins_per_outbound_header() {
-    use super::filter::attach_delegated_tokens;
-    use chrono::{Duration, Utc};
-    use cpex_core::extensions::container::Extensions;
-    use cpex_core::extensions::raw_credentials::{
-        DelegationKey, DelegationMode, RawCredentialsExtension, RawDelegatedToken,
-    };
     use std::sync::Arc;
 
+    use chrono::{Duration, Utc};
+    use cpex_core::extensions::{
+        container::Extensions,
+        raw_credentials::{DelegationKey, DelegationMode, RawCredentialsExtension, RawDelegatedToken},
+    };
+
+    use super::filter::attach_delegated_tokens;
+
     let expires = Utc::now() + Duration::hours(1);
-    let tok_a = RawDelegatedToken::new(
-        "token-a",
-        "Authorization",
-        "aud-a",
-        Vec::<String>::new(),
-        expires,
-    );
-    let tok_b = RawDelegatedToken::new(
-        "token-b",
-        "Authorization",
-        "aud-b",
-        Vec::<String>::new(),
-        expires,
-    );
+    let tok_a = RawDelegatedToken::new("token-a", "Authorization", "aud-a", Vec::<String>::new(), expires);
+    let tok_b = RawDelegatedToken::new("token-b", "Authorization", "aud-b", Vec::<String>::new(), expires);
     let key_a = DelegationKey {
         subject_id: "alice".to_owned(),
         audience: "aud-a".to_owned(),
@@ -1039,29 +1123,19 @@ fn attach_delegated_tokens_first_writer_wins_per_outbound_header() {
 #[test]
 #[allow(clippy::too_many_lines, reason = "test fixture construction")]
 fn attach_delegated_tokens_distinct_outbound_headers_all_attach() {
-    use super::filter::attach_delegated_tokens;
-    use chrono::{Duration, Utc};
-    use cpex_core::extensions::container::Extensions;
-    use cpex_core::extensions::raw_credentials::{
-        DelegationKey, DelegationMode, RawCredentialsExtension, RawDelegatedToken,
-    };
     use std::sync::Arc;
 
+    use chrono::{Duration, Utc};
+    use cpex_core::extensions::{
+        container::Extensions,
+        raw_credentials::{DelegationKey, DelegationMode, RawCredentialsExtension, RawDelegatedToken},
+    };
+
+    use super::filter::attach_delegated_tokens;
+
     let expires = Utc::now() + Duration::hours(1);
-    let tok_auth = RawDelegatedToken::new(
-        "token-auth",
-        "Authorization",
-        "aud-auth",
-        Vec::<String>::new(),
-        expires,
-    );
-    let tok_x = RawDelegatedToken::new(
-        "token-x",
-        "X-Upstream-Token",
-        "aud-x",
-        Vec::<String>::new(),
-        expires,
-    );
+    let tok_auth = RawDelegatedToken::new("token-auth", "Authorization", "aud-auth", Vec::<String>::new(), expires);
+    let tok_x = RawDelegatedToken::new("token-x", "X-Upstream-Token", "aud-x", Vec::<String>::new(), expires);
     let key_auth = DelegationKey {
         subject_id: "alice".to_owned(),
         audience: "aud-auth".to_owned(),

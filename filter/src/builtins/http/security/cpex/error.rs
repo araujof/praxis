@@ -27,10 +27,8 @@ const MCP_GATEWAY_DENIED_CODE: i64 = -32001;
 /// parsing the body. Sent on:
 ///
 /// * HTTP 401 ([`auth_rejection`]) — identity / transport-level deny.
-/// * HTTP 200 ([`mcp_error_rejection`]) — application-level deny
-///   wrapped in a JSON-RPC error envelope.
-/// * HTTP 500 ([`super::filter::missing_mcp_metadata_rejection`]) —
-///   `mcp.method` missing from filter metadata.
+/// * HTTP 200 ([`mcp_error_rejection`]) — application-level deny wrapped in a JSON-RPC error envelope.
+/// * HTTP 500 ([`super::filter::missing_mcp_metadata_rejection`]) — `mcp.method` missing from filter metadata.
 ///
 /// Operators consuming this in audit / SIEM pipelines should treat the
 /// header value as a stable identifier (the code namespace is part of
@@ -57,10 +55,7 @@ pub(super) const VIOLATION_HEADER: &str = "X-Cpex-Violation";
 pub(super) fn auth_rejection(violation: Option<&PluginViolation>) -> Rejection {
     let (code, reason) = match violation {
         Some(v) => (v.code.clone(), v.reason.clone()),
-        None => (
-            "auth.unknown".to_owned(),
-            "authentication required".to_owned(),
-        ),
+        None => ("auth.unknown".to_owned(), "authentication required".to_owned()),
     };
     let body = format!("{code}: {reason}");
     Rejection::status(401)
@@ -96,15 +91,9 @@ pub(super) fn auth_rejection(violation: Option<&PluginViolation>) -> Rejection {
 ///   }
 /// }
 /// ```
-pub(super) fn mcp_error_rejection(
-    violation: Option<&PluginViolation>,
-    request_id: &serde_json::Value,
-) -> Rejection {
+pub(super) fn mcp_error_rejection(violation: Option<&PluginViolation>, request_id: &serde_json::Value) -> Rejection {
     let bytes = mcp_error_envelope_bytes(violation, request_id);
-    let violation_code = violation.map_or_else(
-        || "gateway.unknown".to_owned(),
-        |v| v.code.clone(),
-    );
+    let violation_code = violation.map_or_else(|| "gateway.unknown".to_owned(), |v| v.code.clone());
     Rejection::status(200)
         .with_header("Content-Type", "application/json")
         .with_header(VIOLATION_HEADER, violation_code)
@@ -114,23 +103,14 @@ pub(super) fn mcp_error_rejection(
 /// Build only the JSON-RPC error envelope bytes (no HTTP status, no
 /// headers). Used by both:
 ///
-/// * [`mcp_error_rejection`] — pre-upstream denies, where we get to
-///   build a full `Rejection` including headers.
-/// * `on_response_body` — post-phase denies, where the HTTP status and
-///   headers have already been sent to the client; the only thing left
-///   to mutate is the body bytes. Replacing the upstream response body
-///   with this envelope is the strongest enforcement available from
-///   the response body phase under the current praxis API.
-pub(super) fn mcp_error_envelope_bytes(
-    violation: Option<&PluginViolation>,
-    request_id: &serde_json::Value,
-) -> Bytes {
+/// * [`mcp_error_rejection`] — pre-upstream denies, where we get to build a full `Rejection` including headers.
+/// * `on_response_body` — post-phase denies, where the HTTP status and headers have already been sent to the client;
+///   the only thing left to mutate is the body bytes. Replacing the upstream response body with this envelope is the
+///   strongest enforcement available from the response body phase under the current praxis API.
+pub(super) fn mcp_error_envelope_bytes(violation: Option<&PluginViolation>, request_id: &serde_json::Value) -> Bytes {
     let (violation_code, reason) = match violation {
         Some(v) => (v.code.clone(), v.reason.clone()),
-        None => (
-            "gateway.unknown".to_owned(),
-            "denied by gateway".to_owned(),
-        ),
+        None => ("gateway.unknown".to_owned(), "denied by gateway".to_owned()),
     };
     let body = serde_json::json!({
         "jsonrpc": "2.0",

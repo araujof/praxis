@@ -22,8 +22,7 @@ use std::collections::HashMap;
 
 use praxis_core::config::Config;
 use praxis_test_utils::{
-    example_config_path, free_port, http_send, parse_status, patch_yaml, start_backend_with_shutdown,
-    start_proxy,
+    example_config_path, free_port, http_send, parse_status, patch_yaml, start_backend_with_shutdown, start_proxy,
 };
 
 // -----------------------------------------------------------------------------
@@ -38,16 +37,12 @@ fn load_cpex_example(proxy_port: u16, port_map: HashMap<&str, u16>) -> Config {
     let praxis_yaml_path = example_config_path("security/cpex.yaml");
     let policy_yaml_path = example_config_path("security/cpex-policy.yaml");
 
-    let raw = std::fs::read_to_string(&praxis_yaml_path)
-        .unwrap_or_else(|e| panic!("read {praxis_yaml_path}: {e}"));
+    let raw = std::fs::read_to_string(&praxis_yaml_path).unwrap_or_else(|e| panic!("read {praxis_yaml_path}: {e}"));
     // The example uses a workspace-relative path for the policy file
     // because that's what an operator would write. The integration
     // test rewrites it to an absolute path so the filter resolves it
     // regardless of the test's working directory.
-    let with_policy = raw.replace(
-        "examples/configs/security/cpex-policy.yaml",
-        &policy_yaml_path,
-    );
+    let with_policy = raw.replace("examples/configs/security/cpex-policy.yaml", &policy_yaml_path);
     let patched = patch_yaml(&with_policy, proxy_port, &port_map);
     Config::from_yaml(&patched).unwrap_or_else(|e| panic!("parse security/cpex.yaml: {e}"))
 }
@@ -60,10 +55,7 @@ fn load_cpex_example(proxy_port: u16, port_map: HashMap<&str, u16>) -> Config {
 fn cpex_example_missing_authorization_rejects_401() {
     let backend_guard = start_backend_with_shutdown("ok");
     let proxy_port = free_port();
-    let config = load_cpex_example(
-        proxy_port,
-        HashMap::from([("127.0.0.1:3000", backend_guard.port())]),
-    );
+    let config = load_cpex_example(proxy_port, HashMap::from([("127.0.0.1:3000", backend_guard.port())]));
     let proxy = start_proxy(&config);
 
     // POST with a well-formed MCP body but no Authorization header.
