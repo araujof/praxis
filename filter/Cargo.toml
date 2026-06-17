@@ -28,6 +28,7 @@ cpex = [
     "dep:apl-delegator-oauth",
     "dep:apl-identity-jwt",
     "dep:apl-pdp-cedar-direct",
+    "dep:apl-pdp-cel",
     "dep:apl-pii-scanner",
     "dep:cpex-core",
     "dep:tokio",
@@ -46,6 +47,7 @@ apl-cpex = { workspace = true, optional = true }
 apl-delegator-oauth = { workspace = true, optional = true }
 apl-identity-jwt = { workspace = true, optional = true }
 apl-pdp-cedar-direct = { workspace = true, optional = true }
+apl-pdp-cel = { workspace = true, optional = true }
 apl-pii-scanner = { workspace = true, optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }

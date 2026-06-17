@@ -7,10 +7,12 @@
 use std::sync::Arc;
 
 use apl_audit_logger::{AuditLoggerFactory, KIND as AUDIT_LOGGER_KIND};
+use apl_core::step::PdpFactory;
 use apl_cpex::{AplOptions, DispatchCache, MemorySessionStore, register_apl};
 use apl_delegator_oauth::{KIND as OAUTH_DELEGATOR_KIND, OAuthDelegatorFactory};
 use apl_identity_jwt::{JwtIdentityFactory, KIND as JWT_KIND};
 use apl_pdp_cedar_direct::CedarDirectPdpFactory;
+use apl_pdp_cel::CelPdpFactory;
 use apl_pii_scanner::{KIND as PII_SCANNER_KIND, PiiScannerFactory};
 use cpex_core::manager::PluginManager;
 
@@ -49,16 +51,19 @@ pub(super) fn register_builtin_factories(mgr: &Arc<PluginManager>) {
 /// than leaking them to every predicate / PDP / step in the same
 /// route.
 ///
-/// Ships the `cedar-direct` PDP factory by default; alternative PDPs
-/// (OPA, Cedarling, future engines) slot in similarly.
+/// Ships the `cedar-direct` and `cel` PDP factories; a route's `cedar:`
+/// or `cel:` step selects which one runs. Alternative PDPs (OPA,
+/// Cedarling, future engines) slot in similarly.
 pub(super) fn register_apl_visitor(mgr: &Arc<PluginManager>) {
+    let pdp_factories: Vec<Arc<dyn PdpFactory>> =
+        vec![Arc::new(CedarDirectPdpFactory::new()), Arc::new(CelPdpFactory::new())];
     register_apl(
         mgr,
         AplOptions {
             dispatch_cache: Arc::new(DispatchCache::new()),
             session_store: Arc::new(MemorySessionStore::new()),
             pdps: Vec::new(),
-            pdp_factories: vec![Arc::new(CedarDirectPdpFactory::new())],
+            pdp_factories,
             base_capabilities: None,
         },
     );

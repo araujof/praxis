@@ -34,17 +34,18 @@ license = "MIT"
 repository = "https://github.com/praxis-proxy/praxis"
 
 [workspace.dependencies]
-# CPEX runtime + APL plugins, all pinned to v0.2.0-ffi.test.7. Version
-# fields and rev bump together when contextforge-org cuts the v0.2.0
-# release.
-apl-audit-logger = { version = "0.1.0", git = "https://github.com/contextforge-org/cpex.git", rev = "0ffced4" }
-apl-cmf = { version = "0.1.0", git = "https://github.com/contextforge-org/cpex.git", rev = "0ffced4" }
-apl-core = { version = "0.1.0", git = "https://github.com/contextforge-org/cpex.git", rev = "0ffced4" }
-apl-cpex = { version = "0.1.0", git = "https://github.com/contextforge-org/cpex.git", rev = "0ffced4" }
-apl-delegator-oauth = { version = "0.1.0", git = "https://github.com/contextforge-org/cpex.git", rev = "0ffced4" }
-apl-identity-jwt = { version = "0.1.0", git = "https://github.com/contextforge-org/cpex.git", rev = "0ffced4" }
-apl-pdp-cedar-direct = { version = "0.1.0", git = "https://github.com/contextforge-org/cpex.git", rev = "0ffced4" }
-apl-pii-scanner = { version = "0.1.0", git = "https://github.com/contextforge-org/cpex.git", rev = "0ffced4" }
+# CPEX runtime + APL plugins, all pinned to the same cpex `dev` rev
+# (post-CEL-merge). Version fields and rev bump together when
+# contextforge-org cuts the v0.2.0 release.
+apl-audit-logger = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
+apl-cmf = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
+apl-core = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
+apl-cpex = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
+apl-delegator-oauth = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
+apl-identity-jwt = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
+apl-pdp-cedar-direct = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
+apl-pdp-cel = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
+apl-pii-scanner = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
 arc-swap = "1.9.1"
 async-trait = "0.1.89"
 benchmarks = { path = "benchmarks" }
@@ -52,7 +53,7 @@ bytes = "1.12.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 dashmap = "6.2.1"
 clap = { version = "4.6.1", features = ["derive"] }
-cpex-core = { version = "0.1.0", git = "https://github.com/contextforge-org/cpex.git", rev = "0ffced4" }
+cpex-core = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "00a0f81c680f3749f049c1877447581a49994b6f" }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 futures = "0.3.32"
 h2 = "0.4.15"

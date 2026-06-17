@@ -101,6 +101,156 @@ fn write_single_plugin_config() -> (TempDir, String) {
     (dir, path_str)
 }
 
+/// Write a CPEX YAML that gates the `echo` tool through a CEL PDP step.
+/// Single HS256 identity plugin (so `subject.id` resolves from the JWT
+/// `sub`), a `kind: cel` PDP declared globally, and a route whose `cel:`
+/// expression allows only `alice`. Exercises the `apl-pdp-cel` backend
+/// end-to-end through the filter's CMF dispatch.
+#[allow(
+    clippy::too_many_lines,
+    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+)]
+fn write_cel_policy_config() -> (TempDir, String) {
+    let dir = TempDir::new().expect("create tempdir");
+    let cfg_path = dir.path().join("cpex.yaml");
+
+    let yaml = format!(
+        r#"plugins:
+  - name: jwt-user
+    kind: identity/jwt
+    hooks:
+      - identity.resolve
+    mode: sequential
+    priority: 10
+    on_error: fail
+    config:
+      header: Authorization
+      trusted_issuers:
+        - issuer: "{TEST_ISSUER}"
+          audiences: ["{TEST_AUDIENCE}"]
+          algorithms: ["HS256"]
+          decoding_key:
+            kind: secret
+            secret: "{TEST_SECRET}"
+          leeway_seconds: 60
+      claim_mapper: standard
+global:
+  apl:
+    pdp:
+      - kind: cel
+routes:
+  - tool: echo
+    apl:
+      policy:
+        - cel:
+            expr: |
+              subject.id == "alice"
+"#
+    );
+
+    std::fs::write(&cfg_path, yaml).expect("write cpex.yaml");
+    let path_str = cfg_path.to_str().expect("utf8 path").to_owned();
+    (dir, path_str)
+}
+
+/// Run a `tools/call` for the `echo` tool as `subject`, returning the
+/// filter's body-phase action. Shared by the CEL allow/deny cases.
+async fn dispatch_echo_as(filter: &CpexFilter, subject: &str) -> FilterAction {
+    let token = mint_jwt(&standard_claims(subject));
+    let mut req = make_request(Method::POST, "/");
+    req.headers.insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {token}")).expect("header value"),
+    );
+    let mut ctx = make_filter_context(&req);
+    ctx.set_metadata("mcp.method", "tools/call");
+    ctx.set_metadata("mcp.name", "echo");
+    let body = bytes::Bytes::from_static(
+        br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#,
+    );
+    filter
+        .on_request_body(&mut ctx, &mut Some(body), true)
+        .await
+        .expect("filter ran")
+}
+
+/// Write a CPEX YAML demonstrating session tainting: a `read-secret`
+/// tool taints the session, and a `send-out` tool denies when the
+/// session carries that taint. Identity is the HS256 jwt plugin so
+/// `subject.id` resolves; the taint persists in the in-process session
+/// store keyed by the resolved session id.
+#[allow(
+    clippy::too_many_lines,
+    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+)]
+fn write_taint_config() -> (TempDir, String) {
+    let dir = TempDir::new().expect("create tempdir");
+    let cfg_path = dir.path().join("cpex.yaml");
+
+    let yaml = format!(
+        r#"plugins:
+  - name: jwt-user
+    kind: identity/jwt
+    hooks:
+      - identity.resolve
+    mode: sequential
+    priority: 10
+    on_error: fail
+    config:
+      header: Authorization
+      trusted_issuers:
+        - issuer: "{TEST_ISSUER}"
+          audiences: ["{TEST_AUDIENCE}"]
+          algorithms: ["HS256"]
+          decoding_key:
+            kind: secret
+            secret: "{TEST_SECRET}"
+          leeway_seconds: 60
+      claim_mapper: standard
+routes:
+  - tool: read-secret
+    apl:
+      policy:
+        - "taint(secret, session)"
+  - tool: send-out
+    apl:
+      policy:
+        - "security.labels contains \"secret\": deny('session accessed secret data', 'session_tainted_secret')"
+"#
+    );
+
+    std::fs::write(&cfg_path, yaml).expect("write cpex.yaml");
+    let path_str = cfg_path.to_str().expect("utf8 path").to_owned();
+    (dir, path_str)
+}
+
+/// Dispatch a `tools/call` for `tool` as `subject` with the given
+/// `X-Session-Id`. Returns the filter's body-phase action. Threads the
+/// session header so cpex's session-scoped taint store can persist /
+/// hydrate labels across calls.
+async fn dispatch_tool_session(filter: &CpexFilter, subject: &str, tool: &str, session_id: &str) -> FilterAction {
+    let token = mint_jwt(&standard_claims(subject));
+    let mut req = make_request(Method::POST, "/");
+    req.headers.insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {token}")).expect("header value"),
+    );
+    req.headers.insert(
+        "X-Session-Id",
+        HeaderValue::from_str(session_id).expect("session header"),
+    );
+    let mut ctx = make_filter_context(&req);
+    ctx.set_metadata("mcp.method", "tools/call");
+    ctx.set_metadata("mcp.name", tool);
+    let body = bytes::Bytes::from_static(
+        br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"t","arguments":{}}}"#,
+    );
+    filter
+        .on_request_body(&mut ctx, &mut Some(body), true)
+        .await
+        .expect("filter ran")
+}
+
 /// Write a CPEX YAML with two identity plugins, each reading its own
 /// header. Demonstrates the multi-source agentic identity story PR1
 /// targets — one request can carry user + agent JWTs simultaneously,
@@ -987,6 +1137,81 @@ async fn on_request_body_dispatches_cmf_when_metadata_present() {
     assert!(
         matches!(action, FilterAction::BodyDone),
         "no APL route should yield BodyDone; got {action:?}",
+    );
+}
+
+/// A `cel:` route step gates the call through the `apl-pdp-cel` backend.
+/// `alice` satisfies `subject.id == "alice"` → Allow (`BodyDone`); any
+/// other subject fails the predicate → fail-closed Deny (`Reject`).
+/// Proves praxis registers `CelPdpFactory` and the CEL PDP decision
+/// flows through CMF dispatch alongside Cedar.
+#[tokio::test(flavor = "multi_thread")]
+async fn cel_route_allows_matching_subject_and_denies_others() {
+    let (_dir, path) = write_cel_policy_config();
+    let filter = build_filter(path);
+
+    let allow = dispatch_echo_as(&filter, "alice").await;
+    assert!(
+        matches!(allow, FilterAction::BodyDone),
+        "alice satisfies the CEL predicate; expected BodyDone, got {allow:?}",
+    );
+
+    let deny = dispatch_echo_as(&filter, "eve").await;
+    assert!(
+        matches!(deny, FilterAction::Reject(_)),
+        "eve fails the CEL predicate; expected Reject, got {deny:?}",
+    );
+}
+
+/// Session tainting end-to-end through the filter: reading the secret
+/// taints the session (`taint(secret, session)`), and a later call in
+/// the SAME session is denied (`security.labels contains "secret"`). A
+/// DIFFERENT session id is unaffected — taint is session-scoped. Proves
+/// the `X-Session-Id` → `agent.session_id` wiring + the cpex session
+/// store's hydrate/persist round-trip across requests.
+#[tokio::test(flavor = "multi_thread")]
+async fn session_taint_persists_and_denies_within_the_same_session() {
+    let (_dir, path) = write_taint_config();
+    let filter = build_filter(path);
+
+    let taint = dispatch_tool_session(&filter, "alice", "read-secret", "sess-1").await;
+    assert!(
+        matches!(taint, FilterAction::BodyDone),
+        "tainting call should pass; got {taint:?}",
+    );
+
+    let denied = dispatch_tool_session(&filter, "alice", "send-out", "sess-1").await;
+    assert!(
+        matches!(denied, FilterAction::Reject(_)),
+        "send-out in the tainted session must be denied; got {denied:?}",
+    );
+
+    let clean = dispatch_tool_session(&filter, "alice", "send-out", "sess-2").await;
+    assert!(
+        matches!(clean, FilterAction::BodyDone),
+        "send-out in a fresh session must pass; got {clean:?}",
+    );
+}
+
+/// Cross-principal isolation: session taint is keyed by the resolved
+/// subject, so the SAME `X-Session-Id` under a different subject is a
+/// different bucket. `eve` taints `shared`, but `bob` reusing `shared`
+/// is unaffected — `H(eve:shared) != H(bob:shared)`.
+#[tokio::test(flavor = "multi_thread")]
+async fn session_taint_is_isolated_across_principals() {
+    let (_dir, path) = write_taint_config();
+    let filter = build_filter(path);
+
+    let taint = dispatch_tool_session(&filter, "eve", "read-secret", "shared").await;
+    assert!(
+        matches!(taint, FilterAction::BodyDone),
+        "eve's tainting call should pass; got {taint:?}",
+    );
+
+    let bob = dispatch_tool_session(&filter, "bob", "send-out", "shared").await;
+    assert!(
+        matches!(bob, FilterAction::BodyDone),
+        "bob reusing eve's session id must NOT inherit her taint; got {bob:?}",
     );
 }
 

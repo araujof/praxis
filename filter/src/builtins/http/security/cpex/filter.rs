@@ -268,6 +268,21 @@ impl CpexFilter {
         meta.entity_name = Some(entity_name.to_owned());
         ext.meta = Some(Arc::new(meta));
 
+        // Thread a per-conversation session id from the `X-Session-Id`
+        // request header into `agent.session_id`. cpex's session resolver
+        // subject-scopes it (`H(subject:session_id)`), so session-scoped
+        // taint labels (`taint(label, session)`) persist across requests
+        // in the same conversation and stay isolated between principals.
+        // Absent header → cpex falls back to its identity-derived session.
+        if let Some(session_id) = Self::snapshot_headers(ctx)
+            .get("x-session-id")
+            .filter(|value| !value.is_empty())
+        {
+            let mut agent = ext.agent.as_ref().map(|arc| (**arc).clone()).unwrap_or_default();
+            agent.session_id = Some(session_id.clone());
+            ext.agent = Some(Arc::new(agent));
+        }
+
         Ok(ext)
     }
 }
