@@ -30,6 +30,7 @@ cpex = [
     "dep:apl-pdp-cedar-direct",
     "dep:apl-pdp-cel",
     "dep:apl-pii-scanner",
+    "dep:apl-session-valkey",
     "dep:cpex-core",
     "dep:tokio",
 ]
@@ -49,6 +50,7 @@ apl-identity-jwt = { workspace = true, optional = true }
 apl-pdp-cedar-direct = { workspace = true, optional = true }
 apl-pdp-cel = { workspace = true, optional = true }
 apl-pii-scanner = { workspace = true, optional = true }
+apl-session-valkey = { workspace = true, optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
 cpex-core = { workspace = true, optional = true }

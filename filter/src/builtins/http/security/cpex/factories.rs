@@ -8,12 +8,13 @@ use std::sync::Arc;
 
 use apl_audit_logger::{AuditLoggerFactory, KIND as AUDIT_LOGGER_KIND};
 use apl_core::step::PdpFactory;
-use apl_cpex::{AplOptions, DispatchCache, MemorySessionStore, register_apl};
+use apl_cpex::{AplOptions, DispatchCache, MemorySessionStore, SessionStoreFactory, register_apl};
 use apl_delegator_oauth::{KIND as OAUTH_DELEGATOR_KIND, OAuthDelegatorFactory};
 use apl_identity_jwt::{JwtIdentityFactory, KIND as JWT_KIND};
 use apl_pdp_cedar_direct::CedarDirectPdpFactory;
 use apl_pdp_cel::CelPdpFactory;
 use apl_pii_scanner::{KIND as PII_SCANNER_KIND, PiiScannerFactory};
+use apl_session_valkey::ValkeySessionStoreFactory;
 use cpex_core::manager::PluginManager;
 
 // -----------------------------------------------------------------------------
@@ -54,9 +55,15 @@ pub(super) fn register_builtin_factories(mgr: &Arc<PluginManager>) {
 /// Ships the `cedar-direct` and `cel` PDP factories; a route's `cedar:`
 /// or `cel:` step selects which one runs. Alternative PDPs (OPA,
 /// Cedarling, future engines) slot in similarly.
+///
+/// Ships the `valkey` session-store factory. The in-memory
+/// `session_store` below stays the active backend unless a
+/// `session_store: { kind: valkey, ... }` block selects the
+/// Valkey-backed store for distributed, restart-durable taint labels.
 pub(super) fn register_apl_visitor(mgr: &Arc<PluginManager>) {
     let pdp_factories: Vec<Arc<dyn PdpFactory>> =
         vec![Arc::new(CedarDirectPdpFactory::new()), Arc::new(CelPdpFactory::new())];
+    let session_store_factories: Vec<Arc<dyn SessionStoreFactory>> = vec![Arc::new(ValkeySessionStoreFactory::new())];
     register_apl(
         mgr,
         AplOptions {
@@ -64,6 +71,7 @@ pub(super) fn register_apl_visitor(mgr: &Arc<PluginManager>) {
             session_store: Arc::new(MemorySessionStore::new()),
             pdps: Vec::new(),
             pdp_factories,
+            session_store_factories,
             base_capabilities: None,
         },
     );

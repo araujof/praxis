@@ -309,6 +309,52 @@ fn write_multi_source_config() -> (TempDir, String) {
     (dir, path_str)
 }
 
+/// Write a CPEX YAML selecting the Valkey-backed session store via a
+/// flat `global.session_store` block. The `valkey` factory connects
+/// lazily (the pool dials on first request), so this config loads
+/// without a running Valkey — it pins that the factory is registered
+/// and the flat `session_store` block parses and resolves.
+fn write_valkey_session_store_config() -> (TempDir, String) {
+    let dir = TempDir::new().expect("create tempdir");
+    let cfg_path = dir.path().join("cpex.yaml");
+
+    let yaml = format!(
+        r#"plugins:
+  - name: jwt-user
+    kind: identity/jwt
+    hooks:
+      - identity.resolve
+    mode: sequential
+    priority: 10
+    on_error: fail
+    config:
+      header: Authorization
+      trusted_issuers:
+        - issuer: "{TEST_ISSUER}"
+          audiences: ["{TEST_AUDIENCE}"]
+          algorithms: ["HS256"]
+          decoding_key:
+            kind: secret
+            secret: "{TEST_SECRET}"
+          leeway_seconds: 60
+      claim_mapper: standard
+global:
+  session_store:
+    kind: valkey
+    endpoint: localhost:6379
+routes:
+  - tool: read-secret
+    apl:
+      policy:
+        - "taint(secret, session)"
+"#
+    );
+
+    std::fs::write(&cfg_path, yaml).expect("write cpex.yaml");
+    let path_str = cfg_path.to_str().expect("utf8 path").to_owned();
+    (dir, path_str)
+}
+
 /// Build a `CpexFilter` from a YAML config path. Defaults
 /// `require_mcp_metadata` to true so the test surface matches the
 /// production default; individual tests that want to test the
@@ -357,6 +403,16 @@ fn config_requires_config_path() {
 #[tokio::test(flavor = "multi_thread")]
 async fn filter_constructs_from_valid_yaml() {
     let (_dir, path) = write_single_plugin_config();
+    let _filter = build_filter(path);
+}
+
+/// A config selecting the Valkey session store (`global.session_store`,
+/// flat form) loads without a running Valkey: the `valkey` factory is
+/// registered and its pool dials lazily on first request. Proves the
+/// factory wiring and that the flat `session_store` block resolves.
+#[tokio::test(flavor = "multi_thread")]
+async fn valkey_session_store_config_builds() {
+    let (_dir, path) = write_valkey_session_store_config();
     let _filter = build_filter(path);
 }
 
