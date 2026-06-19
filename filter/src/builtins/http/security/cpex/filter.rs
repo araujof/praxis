@@ -237,6 +237,10 @@ impl CpexFilter {
     /// raw-credentials, and stamps `MetaExtension.entity_type` /
     /// `entity_name` so route resolution in cpex-core picks the right
     /// route annotation.
+    #[expect(
+        clippy::large_stack_frames,
+        reason = "async handler holding large CMF Extensions across await points"
+    )]
     async fn build_cmf_extensions(
         &self,
         ctx: &HttpFilterContext<'_>,
@@ -376,6 +380,10 @@ impl HttpFilter for CpexFilter {
         Ok(FilterAction::Continue)
     }
 
+    #[expect(
+        clippy::large_stack_frames,
+        reason = "async handler with multiple await points over large CMF types"
+    )]
     async fn on_request_body(
         &self,
         ctx: &mut HttpFilterContext<'_>,

@@ -25,8 +25,6 @@ mod tcp_filter;
 pub use actions::{FilterAction, Rejection};
 pub use any_filter::AnyFilter;
 pub use body::{BodyAccess, BodyBuffer, BodyBufferOverflow, BodyCapabilities, BodyMode};
-#[cfg(feature = "cpex")]
-pub use builtins::CpexFilter;
 #[cfg(feature = "ai-inference")]
 pub use builtins::AnthropicMessagesFormatFilter;
 #[cfg(feature = "ai-inference")]
@@ -37,6 +35,8 @@ pub use builtins::AnthropicStreamEventsFilter;
 pub use builtins::AnthropicToOpenaiFilter;
 #[cfg(feature = "ai-inference")]
 pub use builtins::AnthropicValidateFilter;
+#[cfg(feature = "cpex")]
+pub use builtins::CpexFilter;
 #[cfg(feature = "ai-inference")]
 pub use builtins::OpenaiResponsesValidateFilter;
 #[cfg(feature = "ai-inference")]
