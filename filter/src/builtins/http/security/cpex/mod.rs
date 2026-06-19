@@ -9,7 +9,6 @@
 mod cmf;
 mod config;
 mod error;
-mod factories;
 mod filter;
 mod json_rpc;
 

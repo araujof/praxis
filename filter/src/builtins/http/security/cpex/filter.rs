@@ -25,7 +25,7 @@ use std::sync::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use cpex_core::{
+use cpex::cpex_core::{
     cmf::{CmfHook, Message, MessagePayload, Role},
     error::{PluginError, PluginViolation},
     hooks::Extensions,
@@ -37,7 +37,6 @@ use super::{
     cmf::{entity_for_mcp_method, entity_for_mcp_method_post},
     config::{BodyAccessMode, CpexFilterConfig},
     error::{VIOLATION_HEADER, auth_rejection, mcp_error_envelope_bytes, mcp_error_rejection},
-    factories::{register_apl_visitor, register_builtin_factories},
     json_rpc::{
         build_content_for_method, build_response_content_for_method, json_rpc_id, json_rpc_id_value,
         reserialize_json_rpc_body, reserialize_json_rpc_response_body,
@@ -134,8 +133,7 @@ impl CpexFilter {
         })?;
 
         let mgr = Arc::new(PluginManager::default());
-        register_builtin_factories(&mgr);
-        register_apl_visitor(&mgr);
+        cpex::install_builtins(&mgr);
 
         mgr.load_config_yaml(&yaml)
             .map_err(|e: Box<PluginError>| -> FilterError { format!("cpex: load_config_yaml failed: {e}").into() })?;

@@ -713,7 +713,7 @@ async fn missing_mcp_metadata_passes_when_not_required() {
 /// parse it the same way they parse upstream errors.
 #[test]
 fn mcp_error_envelope_has_expected_shape() {
-    use cpex_core::error::PluginViolation;
+    use cpex::cpex_core::error::PluginViolation;
 
     use super::error::mcp_error_envelope_bytes;
 
@@ -764,7 +764,7 @@ fn mcp_error_envelope_handles_missing_violation() {
 /// short `code: reason` diagnostic.
 #[test]
 fn auth_rejection_shape_when_violation_present() {
-    use cpex_core::error::PluginViolation;
+    use cpex::cpex_core::error::PluginViolation;
 
     use super::error::auth_rejection;
 
@@ -921,7 +921,7 @@ fn json_rpc_id_value_preserves_json_type() {
 /// part so APL `args.<field>` predicates have something to read.
 #[test]
 fn build_content_for_method_tools_call() {
-    use cpex_core::cmf::ContentPart;
+    use cpex::cpex_core::cmf::ContentPart;
 
     use super::json_rpc::build_content_for_method;
 
@@ -946,7 +946,7 @@ fn build_content_for_method_tools_call() {
 /// so route resolution and APL `resource.*` predicates work.
 #[test]
 fn build_content_for_method_resources_read() {
-    use cpex_core::cmf::ContentPart;
+    use cpex::cpex_core::cmf::ContentPart;
 
     use super::json_rpc::build_content_for_method;
 
@@ -982,7 +982,7 @@ fn build_content_for_method_unknown_method_yields_empty() {
 /// APL actually mutated.
 #[test]
 fn reserialize_tools_call_round_trips_with_mutated_args() {
-    use cpex_core::cmf::{ContentPart, Message, Role, ToolCall};
+    use cpex::cpex_core::cmf::{ContentPart, Message, Role, ToolCall};
 
     use super::json_rpc::reserialize_json_rpc_body;
 
@@ -1018,7 +1018,7 @@ fn reserialize_tools_call_round_trips_with_mutated_args() {
 /// `isError` flag round-trips.
 #[test]
 fn build_response_content_for_method_text_fallback() {
-    use cpex_core::cmf::ContentPart;
+    use cpex::cpex_core::cmf::ContentPart;
 
     use super::json_rpc::build_response_content_for_method;
 
@@ -1042,7 +1042,7 @@ fn build_response_content_for_method_text_fallback() {
 /// when present (newer MCP shape).
 #[test]
 fn build_response_content_for_method_prefers_structured_content() {
-    use cpex_core::cmf::ContentPart;
+    use cpex::cpex_core::cmf::ContentPart;
 
     use super::json_rpc::build_response_content_for_method;
 
@@ -1070,7 +1070,7 @@ fn build_response_content_for_method_prefers_structured_content() {
 /// folded view exposes all blocks under `text`.
 #[test]
 fn build_response_content_for_method_folds_all_text_blocks() {
-    use cpex_core::cmf::ContentPart;
+    use cpex::cpex_core::cmf::ContentPart;
 
     use super::json_rpc::build_response_content_for_method;
 
@@ -1103,7 +1103,7 @@ fn build_response_content_for_method_folds_all_text_blocks() {
 /// `structuredContent` is mirrored when the original had it.
 #[test]
 fn reserialize_response_collapses_to_single_vetted_block() {
-    use cpex_core::cmf::{ContentPart, Message, Role, ToolResult};
+    use cpex::cpex_core::cmf::{ContentPart, Message, Role, ToolResult};
 
     use super::json_rpc::reserialize_json_rpc_response_body;
 
@@ -1142,7 +1142,7 @@ fn reserialize_response_collapses_to_single_vetted_block() {
 /// desync.
 #[test]
 fn deny_envelope_fits_committed_length() {
-    use cpex_core::error::PluginViolation;
+    use cpex::cpex_core::error::PluginViolation;
 
     use super::{error::mcp_error_envelope_bytes, filter::fit_to_original_length};
 
@@ -1354,7 +1354,7 @@ fn attach_delegated_tokens_first_writer_wins_per_outbound_header() {
     use std::sync::Arc;
 
     use chrono::{Duration, Utc};
-    use cpex_core::extensions::{
+    use cpex::cpex_core::extensions::{
         container::Extensions,
         raw_credentials::{DelegationKey, DelegationMode, RawCredentialsExtension, RawDelegatedToken},
     };
@@ -1407,7 +1407,7 @@ fn attach_delegated_tokens_distinct_outbound_headers_all_attach() {
     use std::sync::Arc;
 
     use chrono::{Duration, Utc};
-    use cpex_core::extensions::{
+    use cpex::cpex_core::extensions::{
         container::Extensions,
         raw_credentials::{DelegationKey, DelegationMode, RawCredentialsExtension, RawDelegatedToken},
     };

@@ -4,7 +4,7 @@
 //! Maps CPEX `PluginViolation`s to praxis `Rejection`s.
 
 use bytes::Bytes;
-use cpex_core::error::PluginViolation;
+use cpex::cpex_core::error::PluginViolation;
 
 use crate::Rejection;
 

@@ -19,19 +19,10 @@ ai-inference = ["dep:secrecy", "dep:sqlx", "dep:tokio"]
 ext-proc = ["dep:praxis-proto", "dep:tonic", "dep:prost-wkt-types"]
 # CPEX policy filter — multi-source identity, APL routes, delegation,
 # PII detection, audit, and body rewriting. The CPEX runtime + the APL
-# plugin set come in via the optional `apl-*` and `cpex-core` deps;
-# `tokio` drives plugin init.
+# plugin set come in via the optional `cpex` facade dep (which selects
+# the plugins through its own features); `tokio` drives plugin init.
 cpex = [
-    "dep:apl-audit-logger",
-    "dep:apl-core",
-    "dep:apl-cpex",
-    "dep:apl-delegator-oauth",
-    "dep:apl-identity-jwt",
-    "dep:apl-pdp-cedar-direct",
-    "dep:apl-pdp-cel",
-    "dep:apl-pii-scanner",
-    "dep:apl-session-valkey",
-    "dep:cpex-core",
+    "dep:cpex",
     "dep:tokio",
 ]
 
@@ -42,18 +33,9 @@ ignored = ["praxis-proto", "prost-wkt-types", "tonic"]
 workspace = true
 
 [dependencies]
-apl-audit-logger = { workspace = true, optional = true }
-apl-core = { workspace = true, optional = true }
-apl-cpex = { workspace = true, optional = true }
-apl-delegator-oauth = { workspace = true, optional = true }
-apl-identity-jwt = { workspace = true, optional = true }
-apl-pdp-cedar-direct = { workspace = true, optional = true }
-apl-pdp-cel = { workspace = true, optional = true }
-apl-pii-scanner = { workspace = true, optional = true }
-apl-session-valkey = { workspace = true, optional = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-cpex-core = { workspace = true, optional = true }
+cpex = { workspace = true, optional = true }
 dashmap = { workspace = true }
 http = { workspace = true }
 percent-encoding = { workspace = true }
