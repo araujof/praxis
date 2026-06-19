@@ -34,19 +34,19 @@ license = "MIT"
 repository = "https://github.com/praxis-proxy/praxis"
 
 [workspace.dependencies]
-# CPEX runtime + APL plugins, all pinned to the same cpex `dev` rev
-# (post-CEL-merge). Version fields and rev bump together when
-# contextforge-org cuts the v0.2.0 release.
-apl-audit-logger = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
-apl-cmf = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
-apl-core = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
-apl-cpex = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
-apl-delegator-oauth = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
-apl-identity-jwt = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
-apl-pdp-cedar-direct = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
-apl-pdp-cel = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
-apl-pii-scanner = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
-apl-session-valkey = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
+# CPEX runtime + APL plugins, all pinned to the same cpex release tag.
+# Bump the tag together across every crate when contextforge-org cuts a
+# new release.
+apl-audit-logger = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
+apl-cmf = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
+apl-core = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
+apl-cpex = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
+apl-delegator-oauth = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
+apl-identity-jwt = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
+apl-pdp-cedar-direct = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
+apl-pdp-cel = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
+apl-pii-scanner = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
+apl-session-valkey = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
 arc-swap = "1.9.1"
 async-trait = "0.1.89"
 benchmarks = { path = "benchmarks" }
@@ -54,7 +54,7 @@ bytes = "1.12.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 dashmap = "6.2.1"
 clap = { version = "4.6.1", features = ["derive"] }
-cpex-core = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", rev = "ef0439e2d1e4d4cd3cd841eb5628a3b7b9ecb062" }
+cpex-core = { version = "0.2.0", git = "https://github.com/contextforge-org/cpex.git", tag = "0.2.0-alpha.3" }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 futures = "0.3.32"
 h2 = "0.4.15"
