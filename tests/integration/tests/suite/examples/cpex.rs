@@ -35,14 +35,14 @@ use praxis_test_utils::{
 #[allow(clippy::needless_pass_by_value, reason = "callers construct the map inline")]
 fn load_cpex_example(proxy_port: u16, port_map: HashMap<&str, u16>) -> Config {
     let praxis_yaml_path = example_config_path("security/cpex.yaml");
-    let policy_yaml_path = example_config_path("security/cpex-policy.yaml");
+    let policy_yaml_path = format!("{}/fixtures/cpex-policy.yaml", env!("CARGO_MANIFEST_DIR"));
 
     let raw = std::fs::read_to_string(&praxis_yaml_path).unwrap_or_else(|e| panic!("read {praxis_yaml_path}: {e}"));
-    // The example uses a workspace-relative path for the policy file
-    // because that's what an operator would write. The integration
-    // test rewrites it to an absolute path so the filter resolves it
-    // regardless of the test's working directory.
-    let with_policy = raw.replace("examples/configs/security/cpex-policy.yaml", &policy_yaml_path);
+    // The example points `config_path` at an operator-supplied
+    // deployment path (the policy is not shipped under examples/). The
+    // test rewrites it to the minimal in-repo fixture so the filter
+    // constructs regardless of the test's working directory.
+    let with_policy = raw.replace("/etc/praxis/cpex-policy.yaml", &policy_yaml_path);
     let patched = patch_yaml(&with_policy, proxy_port, &port_map);
     Config::from_yaml(&patched).unwrap_or_else(|e| panic!("parse security/cpex.yaml: {e}"))
 }

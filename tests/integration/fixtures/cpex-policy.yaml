@@ -1,4 +1,8 @@
-# CPEX policy document for the `cpex.yaml` praxis example.
+# CPEX policy fixture for the `security/cpex.yaml` example integration
+# test. The example itself points `config_path` at an operator-supplied
+# deployment path; the test rewrites that to this file so the cpex
+# filter constructs against a real policy without shipping one under
+# examples/.
 #
 # Minimal shape: one HS256 JWT identity plugin, no routes. The cpex
 # filter resolves identity in on_request (deny on missing/invalid

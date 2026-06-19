@@ -9,12 +9,13 @@
 # by praxis's built-in `mcp` filter, which MUST be ordered before it
 # in the chain.
 #
-# `config_path` points at the CPEX policy YAML — plugins + routes —
-# which the filter loads once at construction. The example policy file
-# at `cpex-policy.yaml` declares a single HS256 identity plugin and
-# nothing else, so the filter accepts any valid bearer JWT and passes
-# the request through to the upstream. Real deployments add routes,
-# Cedar PDPs, and delegators in the policy file.
+# `config_path` points at the CPEX policy YAML (plugins + routes) that
+# the filter loads once at construction. It is operator-supplied, not
+# shipped here: a real policy carries your own issuers, secrets, routes,
+# PDPs, and delegators. See the praxis-demos repo
+# (`demos/cpex/cpex.yaml`) for a fully-featured policy, and
+# `tests/integration/fixtures/cpex-policy.yaml` for the minimal
+# single-HS256-identity-plugin policy the integration test loads.
 #
 # `require_mcp_metadata: true` (the default) fail-closes when the
 # `mcp` filter is missing or ordered after `cpex` — this guards
@@ -41,9 +42,9 @@
 #     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
 #          "params":{"name":"echo","arguments":{}}}'
 #
-# The companion `cpex-policy.yaml` ships with a placeholder shared
-# secret — replace it before doing anything beyond local
-# experimentation.
+# Supply your own policy document at `config_path` before running this
+# example; the minimal test fixture uses a placeholder shared secret
+# that must not be used beyond local experimentation.
 
 listeners:
   - name: default
@@ -59,7 +60,7 @@ filter_chains:
         # mcp.method / mcp.name in filter_metadata. Must precede cpex.
 
       - filter: cpex
-        config_path: examples/configs/security/cpex-policy.yaml
+        config_path: /etc/praxis/cpex-policy.yaml
         # Fail-closed when mcp.method is missing. Set to `false` only
         # when intentionally fronting non-MCP traffic through cpex for
         # identity-only enforcement.
