@@ -11,6 +11,7 @@ mod config;
 mod error;
 mod filter;
 mod json_rpc;
+mod timing;
 
 pub use filter::CpexFilter;
 

@@ -74,6 +74,15 @@ pub struct CpexFilterConfig {
     /// during the deploy.
     #[serde(default = "default_init_timeout_secs")]
     pub init_timeout_secs: u64,
+
+    /// Emit one structured `cpex.timing` tracing event per dispatched
+    /// request, carrying praxis-side stage durations plus the cpex-core
+    /// per-plugin / per-PDP breakdown. Off by default (the production
+    /// hot path stays quiet). For the full per-plugin breakdown the
+    /// referenced CPEX policy must also set
+    /// `plugin_settings.capture_timings: true`. Used for benchmarking.
+    #[serde(default)]
+    pub emit_timing_records: bool,
 }
 
 /// `#[serde(default = ...)]` requires a free function for primitives

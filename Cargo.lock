@@ -158,7 +158,6 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 [[package]]
 name = "apl-audit-logger"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "async-trait",
  "chrono",
@@ -172,7 +171,6 @@ dependencies = [
 [[package]]
 name = "apl-cmf"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "apl-core",
  "cpex-core",
@@ -182,7 +180,6 @@ dependencies = [
 [[package]]
 name = "apl-core"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "async-trait",
  "cpex-orchestration",
@@ -197,7 +194,6 @@ dependencies = [
 [[package]]
 name = "apl-cpex"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "apl-cmf",
  "apl-core",
@@ -215,7 +211,6 @@ dependencies = [
 [[package]]
 name = "apl-delegator-oauth"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "apl-core",
  "async-trait",
@@ -235,7 +230,6 @@ dependencies = [
 [[package]]
 name = "apl-identity-jwt"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "apl-core",
  "async-trait",
@@ -256,7 +250,6 @@ dependencies = [
 [[package]]
 name = "apl-pdp-cedar-direct"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "apl-core",
  "async-trait",
@@ -272,7 +265,6 @@ dependencies = [
 [[package]]
 name = "apl-pdp-cel"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "apl-core",
  "async-trait",
@@ -287,7 +279,6 @@ dependencies = [
 [[package]]
 name = "apl-pii-scanner"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "async-trait",
  "cpex-core",
@@ -301,7 +292,6 @@ dependencies = [
 [[package]]
 name = "apl-session-valkey"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "apl-cpex",
  "async-trait",
@@ -1007,7 +997,6 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 [[package]]
 name = "cpex"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "apl-audit-logger",
  "apl-cmf",
@@ -1025,7 +1014,6 @@ dependencies = [
 [[package]]
 name = "cpex-core"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1048,7 +1036,6 @@ dependencies = [
 [[package]]
 name = "cpex-orchestration"
 version = "0.2.0"
-source = "git+https://github.com/contextforge-org/cpex.git?rev=702ab163c64fe762318cb2bc5fb9b088869dd1af#702ab163c64fe762318cb2bc5fb9b088869dd1af"
 dependencies = [
  "futures",
  "tokio",

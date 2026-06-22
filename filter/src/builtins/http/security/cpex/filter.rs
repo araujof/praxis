@@ -41,6 +41,7 @@ use super::{
         build_content_for_method, build_response_content_for_method, json_rpc_id, json_rpc_id_value,
         reserialize_json_rpc_body, reserialize_json_rpc_response_body,
     },
+    timing::{StageNs, StageTimer, emit_record},
 };
 use crate::{
     FilterAction, FilterError, Rejection,
@@ -435,10 +436,12 @@ impl HttpFilter for CpexFilter {
         };
 
         // Build `Extensions` with re-resolved identity + entity coords.
+        let ext_timer = StageTimer::start();
         let extensions = match self.build_cmf_extensions(ctx, entity_type, &entity_name).await {
             Ok(ext) => ext,
             Err(rej) => return Ok(FilterAction::Reject(rej)),
         };
+        let ext_ns = ext_timer.elapsed_ns();
 
         // Parse the JSON-RPC body to build the typed CMF content part.
         // praxis's `mcp` filter already parsed once but only stashed
@@ -446,9 +449,11 @@ impl HttpFilter for CpexFilter {
         // that APL `args.*` predicates need. We re-parse here. The
         // body is already in memory; the duplicate parse is
         // microseconds.
+        let parse_timer = StageTimer::start();
         let body_bytes = body.as_ref().cloned().unwrap_or_else(Bytes::new);
         let id = json_rpc_id(&body_bytes);
         let content = build_content_for_method(&method, &entity_name, &id, &body_bytes);
+        let parse_ns = parse_timer.elapsed_ns();
 
         // Dispatch the CMF hook. The route annotation (installed by
         // the APL visitor at config-load time) drives policy
@@ -456,10 +461,12 @@ impl HttpFilter for CpexFilter {
         let payload = MessagePayload {
             message: Message::with_content(Role::User, content),
         };
+        let cmf_timer = StageTimer::start();
         let (cmf_result, _bg) = self
             .mgr
             .invoke_named::<CmfHook>(hook_name, payload, extensions, None)
             .await;
+        let cmf_ns = cmf_timer.elapsed_ns();
 
         if !cmf_result.continue_processing {
             let request_id = json_rpc_id_value(&body_bytes);
@@ -469,6 +476,20 @@ impl HttpFilter for CpexFilter {
                 entity = %entity_name,
                 "CMF deny",
             );
+            if self.cfg.emit_timing_records {
+                emit_record(
+                    &method,
+                    &entity_name,
+                    "deny",
+                    &StageNs {
+                        build_extensions: ext_ns,
+                        parse: parse_ns,
+                        cmf_dispatch: cmf_ns,
+                        reserialize: 0,
+                    },
+                    cmf_result.timings.as_ref(),
+                );
+            }
             return Ok(FilterAction::Reject(mcp_error_rejection(
                 cmf_result.violation.as_ref(),
                 &request_id,
@@ -493,6 +514,7 @@ impl HttpFilter for CpexFilter {
         // (a `redact()` / `assign()` step fired), re-serialize the
         // mutated `MessagePayload` back into the JSON-RPC body so the
         // upstream service receives the rewritten args.
+        let reserialize_timer = StageTimer::start();
         if matches!(self.cfg.body_access, BodyAccessMode::ReadWrite)
             && let Some(mp) = cmf_result.modified_payload.as_ref()
             && let Some(updated) = mp.as_any().downcast_ref::<MessagePayload>()
@@ -517,12 +539,28 @@ impl HttpFilter for CpexFilter {
             }
         }
 
+        let reserialize_ns = reserialize_timer.elapsed_ns();
+
         tracing::trace!(
             target: "cpex.filter",
             hook = %hook_name,
             entity = %entity_name,
             "CMF allow",
         );
+        if self.cfg.emit_timing_records {
+            emit_record(
+                &method,
+                &entity_name,
+                "allow",
+                &StageNs {
+                    build_extensions: ext_ns,
+                    parse: parse_ns,
+                    cmf_dispatch: cmf_ns,
+                    reserialize: reserialize_ns,
+                },
+                cmf_result.timings.as_ref(),
+            );
+        }
         Ok(FilterAction::BodyDone)
     }
 
