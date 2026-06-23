@@ -11,6 +11,8 @@ mod anthropic;
 #[cfg(feature = "ai-inference")]
 pub(crate) mod classifier;
 #[cfg(feature = "ai-inference")]
+mod guardrails;
+#[cfg(feature = "ai-inference")]
 mod inference;
 #[cfg(feature = "ai-inference")]
 pub(crate) mod openai;
@@ -22,6 +24,9 @@ pub(crate) mod store;
 pub(crate) mod token_usage;
 
 mod token_usage_headers;
+
+pub(crate) mod config_validation;
+mod on_invalid;
 
 pub use agentic::{A2aFilter, JsonRpcFilter, McpFilter};
 #[cfg(feature = "ai-inference")]
@@ -35,7 +40,10 @@ pub use anthropic::AnthropicToOpenaiFilter;
 #[cfg(feature = "ai-inference")]
 pub use anthropic::AnthropicValidateFilter;
 #[cfg(feature = "ai-inference")]
+pub use guardrails::AiGuardrailsFilter;
+#[cfg(feature = "ai-inference")]
 pub use inference::ModelToHeaderFilter;
+pub(crate) use on_invalid::OnInvalidBehavior;
 #[cfg(feature = "ai-inference")]
 pub use openai::OpenaiResponsesValidateFilter;
 #[cfg(feature = "ai-inference")]
