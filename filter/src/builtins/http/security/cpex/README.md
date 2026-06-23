@@ -52,6 +52,7 @@ filters:
     body_access: read_write              # optional; default read_only
     require_mcp_metadata: true           # optional; default true
     init_timeout_secs: 30                # optional; default 30
+    max_buffer_bytes: 10485760           # optional; default 10 MiB (read_write only)
 ```
 
 | Field | Default | Purpose |
@@ -60,6 +61,7 @@ filters:
 | `body_access` | `read_only` | `read_only` buffers the body for inspection and discards mutations. `read_write` re-serializes field mutations (`redact`, `assign`) back into the request and response. |
 | `require_mcp_metadata` | `true` | Reject any request that reaches the filter without `mcp.method` metadata. Set `false` only to front non-MCP traffic for identity-only enforcement. |
 | `init_timeout_secs` | `30` | Time budget for `PluginManager::initialize` at startup (identity plugins fetch JWKS over HTTPS). On expiry the build fails fast. |
+| `max_buffer_bytes` | `10485760` | Max body bytes buffered in `read_write` mode (10 MiB). Bounds per-request memory against oversized payloads. Ignored in `read_only` mode. |
 
 ## The policy document
 

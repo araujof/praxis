@@ -74,6 +74,15 @@ pub struct CpexFilterConfig {
     /// during the deploy.
     #[serde(default = "default_init_timeout_secs")]
     pub init_timeout_secs: u64,
+
+    /// Maximum request/response body bytes buffered in `ReadWrite`
+    /// mode. `ReadWrite` uses `StreamBuffer` to accumulate the whole
+    /// body before APL field mutators run; without a cap an oversized
+    /// payload could exhaust memory. Ignored in `ReadOnly` mode, which
+    /// streams. The pipeline rejects an unbounded buffer at config
+    /// load, so this always carries a concrete ceiling.
+    #[serde(default = "default_max_buffer_bytes")]
+    pub max_buffer_bytes: usize,
 }
 
 /// `#[serde(default = ...)]` requires a free function for primitives
@@ -86,6 +95,12 @@ fn default_true() -> bool {
 /// Default upper bound on `PluginManager::initialize` (seconds).
 fn default_init_timeout_secs() -> u64 {
     30
+}
+
+/// Default `ReadWrite` body buffer ceiling. 10 MiB comfortably covers
+/// JSON-RPC tool-call payloads while bounding per-request memory.
+fn default_max_buffer_bytes() -> usize {
+    10_485_760 // 10 MiB
 }
 
 /// What APL field-pipeline mutators on `args.<field>` and

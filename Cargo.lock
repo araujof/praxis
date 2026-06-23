@@ -3277,6 +3277,7 @@ dependencies = [
  "bytes",
  "futures",
  "http",
+ "jsonwebtoken",
  "praxis-proxy-core",
  "praxis-proxy-filter",
  "praxis-proxy-protocol",

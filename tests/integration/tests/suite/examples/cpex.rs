@@ -5,25 +5,58 @@
 //!
 //! Exercises the `examples/configs/security/cpex.yaml` filter chain
 //! end-to-end: praxis is configured with the `mcp` → `cpex` → `router`
-//! → `load_balancer` chain, an HTTP request is sent without an
-//! `Authorization` header, and we assert the filter rejects with
-//! HTTP 401 (the cpex identity gate's `auth_rejection` path).
+//! → `load_balancer` chain. Two cases:
 //!
-//! Why no happy-path test here: a positive case requires minting an
-//! HS256 JWT and constructing a valid MCP JSON-RPC body that praxis's
-//! built-in `mcp` filter accepts. The unit tests in
-//! `filter/src/builtins/http/security/cpex/tests.rs` cover that path
-//! against the filter trait directly. The intent here is the
-//! CLAUDE.md "Adding a Filter" integration-test requirement: prove
-//! the example config loads, the filter constructs from the policy
-//! YAML, and the chain produces the documented error response.
+//! * **Deny** — a request with no `Authorization` header is rejected with HTTP 401 (the cpex identity gate's
+//!   `auth_rejection` path).
+//! * **Allow** — a request carrying a valid HS256 JWT (signed with the fixture's shared secret) resolves identity,
+//!   finds no APL route to gate it, and passes through to the backend with HTTP 200.
+//!
+//! Together these prove the example config loads, the filter
+//! constructs from the policy YAML, and the chain both blocks
+//! unauthenticated traffic and forwards authenticated traffic — the
+//! CLAUDE.md "Adding a Filter" end-to-end functional requirement.
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use praxis_core::config::Config;
 use praxis_test_utils::{
     example_config_path, free_port, http_send, parse_status, patch_yaml, start_backend_with_shutdown, start_proxy,
 };
+
+// Identity parameters mirrored from `tests/integration/fixtures/cpex-policy.yaml`.
+// The happy-path JWT must match the fixture's trusted issuer, audience,
+// algorithm, and shared secret for the `jwt-user` identity plugin to
+// accept it.
+const FIXTURE_ISSUER: &str = "https://idp.example.com";
+const FIXTURE_AUDIENCE: &str = "praxis-cpex-example";
+const FIXTURE_SECRET: &str = "REPLACE-WITH-A-PROPERLY-RANDOM-SHARED-SECRET-DO-NOT-COMMIT";
+
+/// Mint an HS256 JWT accepted by the fixture's `jwt-user` plugin: the
+/// fixture's issuer/audience, the given subject, and a fresh `exp`.
+fn mint_fixture_jwt(subject: &str) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_secs();
+    let claims = serde_json::json!({
+        "iss": FIXTURE_ISSUER,
+        "aud": FIXTURE_AUDIENCE,
+        "sub": subject,
+        "iat": now,
+        "exp": now + 300,
+    });
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(FIXTURE_SECRET.as_bytes()),
+    )
+    .expect("sign fixture JWT")
+}
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -32,7 +65,7 @@ use praxis_test_utils::{
 /// Load the CPEX praxis example, patch the relative `config_path`
 /// reference into an absolute path, then patch ports. Returns a
 /// fully-parsed [`Config`] ready for [`start_proxy`].
-#[allow(clippy::needless_pass_by_value, reason = "callers construct the map inline")]
+#[expect(clippy::needless_pass_by_value, reason = "callers construct the map inline")]
 fn load_cpex_example(proxy_port: u16, port_map: HashMap<&str, u16>) -> Config {
     let praxis_yaml_path = example_config_path("security/cpex.yaml");
     let policy_yaml_path = format!("{}/fixtures/cpex-policy.yaml", env!("CARGO_MANIFEST_DIR"));
@@ -88,5 +121,44 @@ fn cpex_example_missing_authorization_rejects_401() {
     assert!(
         raw.to_lowercase().contains("x-cpex-violation:"),
         "rejection should surface the violation code via X-Cpex-Violation; raw response:\n{raw}",
+    );
+}
+
+#[test]
+fn cpex_example_valid_jwt_passes_through() {
+    let backend_guard = start_backend_with_shutdown("ok");
+    let proxy_port = free_port();
+    let config = load_cpex_example(proxy_port, HashMap::from([("127.0.0.1:3000", backend_guard.port())]));
+    let proxy = start_proxy(&config);
+
+    // Same well-formed MCP body as the deny case, but now carrying a
+    // valid HS256 JWT. The cpex identity gate resolves it, the fixture
+    // declares no APL routes so policy dispatch is a no-op, and the
+    // request reaches the backend (HTTP 200, body "ok").
+    let token = mint_fixture_jwt("alice");
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#;
+    let raw = http_send(
+        proxy.addr(),
+        &format!(
+            "POST /mcp HTTP/1.1\r\n\
+             Host: localhost\r\n\
+             Authorization: Bearer {token}\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\
+             \r\n\
+             {body}",
+            body.len(),
+        ),
+    );
+
+    assert_eq!(
+        parse_status(&raw),
+        200,
+        "a valid JWT should resolve identity and pass through to the backend; raw response:\n{raw}",
+    );
+    assert!(
+        raw.contains("ok"),
+        "the upstream backend body should reach the client on the allow path; raw response:\n{raw}",
     );
 }

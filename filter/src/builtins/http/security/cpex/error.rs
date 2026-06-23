@@ -28,7 +28,7 @@ const MCP_GATEWAY_DENIED_CODE: i64 = -32001;
 ///
 /// * HTTP 401 ([`auth_rejection`]) — identity / transport-level deny.
 /// * HTTP 200 ([`mcp_error_rejection`]) — application-level deny wrapped in a JSON-RPC error envelope.
-/// * HTTP 500 ([`super::filter::missing_mcp_metadata_rejection`]) — `mcp.method` missing from filter metadata.
+/// * HTTP 500 (`missing_mcp_metadata_rejection`) — `mcp.method` missing from filter metadata.
 ///
 /// Operators consuming this in audit / SIEM pipelines should treat the
 /// header value as a stable identifier (the code namespace is part of
@@ -121,5 +121,18 @@ pub(super) fn mcp_error_envelope_bytes(violation: Option<&PluginViolation>, requ
             "data": { "violation": violation_code },
         }
     });
-    Bytes::from(serde_json::to_vec(&body).unwrap_or_default())
+    // The envelope above is built entirely from owned `String`s and a
+    // pre-parsed `request_id` Value, so `to_vec` is infallible in
+    // practice. Fall back to a static, valid deny envelope rather than
+    // an empty body if that ever changes: every caller is a deny path
+    // that replaces the response body, so an empty body would weaken
+    // (never strengthen) enforcement, and panicking mid-response-phase
+    // (`block_in_place`) is worse still.
+    Bytes::from(serde_json::to_vec(&body).unwrap_or_else(|_| FALLBACK_DENY_ENVELOPE.to_vec()))
 }
+
+/// Static, always-valid JSON-RPC deny envelope used only if serializing
+/// the dynamic envelope in [`mcp_error_envelope_bytes`] ever fails.
+/// Keeps the deny path total without emitting an empty (fail-open) body.
+const FALLBACK_DENY_ENVELOPE: &[u8] =
+    br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"denied by gateway","data":{"violation":"gateway.unknown"}}}"#;

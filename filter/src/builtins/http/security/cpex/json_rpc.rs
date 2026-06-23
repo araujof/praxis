@@ -2,16 +2,7 @@
 // Copyright (c) 2026 Praxis Contributors
 
 //! JSON-RPC body parsing + typed CMF content-part builders.
-// The builders/re-serializers branch on MCP method and conditionally
-// touch nested envelope fields; `too_many_lines` and
-// `cognitive_complexity` fire on the longer ones but the alternatives
-// (per-method helpers) hurt readability of a tightly-coupled
-// envelope shape.
-#![allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    reason = "envelope orchestration; splitting per-method obscures the JSON-RPC shape"
-)]
+//!
 //! Praxis's `mcp` filter parses JSON-RPC bodies and stashes
 //! `mcp.method` / `mcp.name` in `filter_metadata`, but it doesn't
 //! materialize `params.arguments` (or `result.content`) into a typed
@@ -68,6 +59,10 @@ pub(super) fn json_rpc_id_value(body: &Bytes) -> serde_json::Value {
 /// malformed or absent body, falls back to an empty content list — the
 /// caller can still dispatch CMF (entity coords drive routing), just
 /// without typed args available to predicates.
+#[expect(
+    clippy::too_many_lines,
+    reason = "per-method envelope orchestration; splitting per-method obscures the JSON-RPC shape"
+)]
 pub(super) fn build_content_for_method(
     method: &str,
     entity_name: &str,
@@ -155,6 +150,10 @@ pub(super) fn build_content_for_method(
 /// blast radius of the rewrite — operators relying on a byte-stable
 /// envelope (signature validation, content-hash matching) only see
 /// changes when APL actually mutated.
+#[expect(
+    clippy::too_many_lines,
+    reason = "per-method envelope orchestration; splitting per-method obscures the JSON-RPC shape"
+)]
 pub(super) fn reserialize_json_rpc_body(original: &Bytes, method: &str, message: &Message) -> Option<Bytes> {
     let mut envelope: serde_json::Value = serde_json::from_slice(original).ok()?;
     let params = envelope.get_mut("params")?;
@@ -217,6 +216,10 @@ pub(super) fn reserialize_json_rpc_body(original: &Bytes, method: &str, message:
 /// and [`reserialize_json_rpc_response_body`] never rewrote, leaking it
 /// downstream. The view here and the bytes emitted there are kept to
 /// the same content set.
+#[expect(
+    clippy::too_many_lines,
+    reason = "per-method envelope orchestration; splitting per-method obscures the JSON-RPC shape"
+)]
 pub(super) fn build_response_content_for_method(
     method: &str,
     entity_name: &str,

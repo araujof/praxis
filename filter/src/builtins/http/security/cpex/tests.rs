@@ -17,7 +17,7 @@ use tempfile::TempDir;
 use super::{config::CpexFilterConfig, filter::CpexFilter};
 use crate::{
     FilterAction,
-    filter::HttpFilter,
+    filter::HttpFilter as _,
     test_utils::{make_filter_context, make_request},
 };
 
@@ -106,7 +106,7 @@ fn write_single_plugin_config() -> (TempDir, String) {
 /// `sub`), a `kind: cel` PDP declared globally, and a route whose `cel:`
 /// expression allows only `alice`. Exercises the `apl-pdp-cel` backend
 /// end-to-end through the filter's CMF dispatch.
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
 )]
@@ -179,7 +179,7 @@ async fn dispatch_echo_as(filter: &CpexFilter, subject: &str) -> FilterAction {
 /// session carries that taint. Identity is the HS256 jwt plugin so
 /// `subject.id` resolves; the taint persists in the in-process session
 /// store keyed by the resolved session id.
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
 )]
@@ -255,7 +255,7 @@ async fn dispatch_tool_session(filter: &CpexFilter, subject: &str, tool: &str, s
 /// header. Demonstrates the multi-source agentic identity story PR1
 /// targets — one request can carry user + agent JWTs simultaneously,
 /// both validated, both contributing to a typed `Extensions` context.
-#[allow(
+#[expect(
     clippy::too_many_lines,
     reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
 )]
@@ -314,6 +314,10 @@ fn write_multi_source_config() -> (TempDir, String) {
 /// lazily (the pool dials on first request), so this config loads
 /// without a running Valkey — it pins that the factory is registered
 /// and the flat `session_store` block parses and resolves.
+#[expect(
+    clippy::too_many_lines,
+    reason = "test fixture — the YAML literal is the bulk; splitting helpers would obscure the shape under test"
+)]
 fn write_valkey_session_store_config() -> (TempDir, String) {
     let dir = TempDir::new().expect("create tempdir");
     let cfg_path = dir.path().join("cpex.yaml");
@@ -365,6 +369,7 @@ fn build_filter(config_path: String) -> CpexFilter {
         body_access: super::config::BodyAccessMode::ReadOnly,
         require_mcp_metadata: true,
         init_timeout_secs: 30,
+        max_buffer_bytes: 10_485_760,
     };
     CpexFilter::new(cfg).expect("filter should construct")
 }
@@ -374,13 +379,23 @@ fn build_filter(config_path: String) -> CpexFilter {
 // =====================================================================
 
 /// The minimal valid config carries only `config_path:`; all other
-/// fields (`body_access`, `require_mcp_metadata`, `init_timeout_secs`)
-/// take their documented defaults.
+/// fields (`body_access`, `require_mcp_metadata`, `init_timeout_secs`,
+/// `max_buffer_bytes`) take their documented defaults.
 #[test]
 fn config_parses_minimal_yaml() {
     let yaml = "config_path: /etc/praxis/cpex.yaml";
     let cfg: CpexFilterConfig = serde_yaml::from_str(yaml).expect("parse");
     assert_eq!(cfg.config_path, "/etc/praxis/cpex.yaml", "config_path round-trips",);
+    assert_eq!(cfg.max_buffer_bytes, 10_485_760, "max_buffer_bytes defaults to 10 MiB",);
+}
+
+/// `max_buffer_bytes` is operator-tunable; an explicit value overrides
+/// the 10 MiB default so deployments can bound `ReadWrite` buffering.
+#[test]
+fn config_max_buffer_bytes_override() {
+    let yaml = "config_path: /etc/praxis/cpex.yaml\nmax_buffer_bytes: 1048576";
+    let cfg: CpexFilterConfig = serde_yaml::from_str(yaml).expect("parse");
+    assert_eq!(cfg.max_buffer_bytes, 1_048_576, "explicit max_buffer_bytes wins");
 }
 
 /// `config_path:` is mandatory — there's no default that would let
@@ -682,6 +697,7 @@ async fn missing_mcp_metadata_passes_when_not_required() {
         body_access: super::config::BodyAccessMode::ReadOnly,
         require_mcp_metadata: false,
         init_timeout_secs: 30,
+        max_buffer_bytes: 10_485_760,
     };
     let filter = CpexFilter::new(cfg).expect("filter should construct");
 
@@ -851,7 +867,7 @@ fn fit_to_original_length_truncates_on_grow() {
     let new = bytes::Bytes::from_static(b"a much longer rewritten payload");
     let out = fit_to_original_length(new.clone(), 4, "tools/call", "test");
     assert_eq!(out.len(), 4, "grow path must truncate to the original length");
-    assert_eq!(&out[..], &new[..4], "truncation keeps the leading bytes");
+    assert_eq!(&*out, &new[..4], "truncation keeps the leading bytes");
 }
 
 // =====================================================================
@@ -1349,7 +1365,7 @@ fn on_response_body_continues_on_partial_chunks() {
 /// audience attaches, the other is logged and skipped, and the
 /// returned count reflects what actually went on the wire.
 #[test]
-#[allow(clippy::too_many_lines, reason = "test fixture construction")]
+#[expect(clippy::too_many_lines, reason = "test fixture construction")]
 fn attach_delegated_tokens_first_writer_wins_per_outbound_header() {
     use std::sync::Arc;
 
@@ -1402,7 +1418,7 @@ fn attach_delegated_tokens_first_writer_wins_per_outbound_header() {
 /// multi-audience flows (the common case for routes that delegate
 /// to multiple upstream APIs simultaneously).
 #[test]
-#[allow(clippy::too_many_lines, reason = "test fixture construction")]
+#[expect(clippy::too_many_lines, reason = "test fixture construction")]
 fn attach_delegated_tokens_distinct_outbound_headers_all_attach() {
     use std::sync::Arc;
 

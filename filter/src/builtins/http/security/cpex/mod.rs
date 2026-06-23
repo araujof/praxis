@@ -15,12 +15,11 @@ mod json_rpc;
 pub use filter::CpexFilter;
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
-    clippy::needless_raw_strings,
     reason = "tests"
 )]
 mod tests;

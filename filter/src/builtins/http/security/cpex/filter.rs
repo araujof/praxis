@@ -95,6 +95,7 @@ const RUNTIME_REJECTED: u8 = 2;
 /// body_access: read_write       # optional; default read_only
 /// require_mcp_metadata: true    # optional; default true
 /// init_timeout_secs: 30         # optional; default 30
+/// max_buffer_bytes: 10485760    # optional; default 10 MiB (read_write only)
 /// ```
 pub struct CpexFilter {
     /// Filter-level configuration parsed from the YAML block. Held so
@@ -196,7 +197,7 @@ impl CpexFilter {
     /// # Errors
     ///
     /// Returns [`FilterError`] if the config block fails to parse
-    /// as a [`CpexFilterConfig`] or filter construction fails.
+    /// as a `CpexFilterConfig` or filter construction fails.
     pub fn from_config(config: &serde_yaml::Value) -> Result<Box<dyn HttpFilter>, FilterError> {
         let cfg: CpexFilterConfig = parse_filter_config("cpex", config)?;
         let filter = Self::new(cfg)?;
@@ -247,11 +248,17 @@ impl CpexFilter {
         entity_type: &str,
         entity_name: &str,
     ) -> Result<Extensions, Rejection> {
+        // Snapshot the request headers once and reuse them for both
+        // identity resolution and the `x-session-id` lookup below,
+        // rather than cloning the whole header map twice per phase.
+        let headers = Self::snapshot_headers(ctx);
+        let session_id = headers.get("x-session-id").filter(|value| !value.is_empty()).cloned();
+
         let (id_result, _bg) = self
             .mgr
             .invoke_named::<IdentityHook>(
                 HOOK_IDENTITY_RESOLVE,
-                Self::identity_payload(ctx),
+                IdentityPayload::new(String::new(), TokenSource::Bearer).with_headers(headers),
                 Extensions::default(),
                 None,
             )
@@ -276,12 +283,9 @@ impl CpexFilter {
         // taint labels (`taint(label, session)`) persist across requests
         // in the same conversation and stay isolated between principals.
         // Absent header → cpex falls back to its identity-derived session.
-        if let Some(session_id) = Self::snapshot_headers(ctx)
-            .get("x-session-id")
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(session_id) = session_id {
             let mut agent = ext.agent.as_ref().map(|arc| (**arc).clone()).unwrap_or_default();
-            agent.session_id = Some(session_id.clone());
+            agent.session_id = Some(session_id);
             ext.agent = Some(Arc::new(agent));
         }
 
@@ -320,7 +324,9 @@ impl HttpFilter for CpexFilter {
         // back into `body`. `ReadOnly` inherits the default `Stream`.
         match self.cfg.body_access {
             BodyAccessMode::ReadOnly => BodyMode::Stream,
-            BodyAccessMode::ReadWrite => BodyMode::StreamBuffer { max_bytes: None },
+            BodyAccessMode::ReadWrite => BodyMode::StreamBuffer {
+                max_bytes: Some(self.cfg.max_buffer_bytes),
+            },
         }
     }
 
@@ -334,7 +340,9 @@ impl HttpFilter for CpexFilter {
     fn response_body_mode(&self) -> BodyMode {
         match self.cfg.body_access {
             BodyAccessMode::ReadOnly => BodyMode::Stream,
-            BodyAccessMode::ReadWrite => BodyMode::StreamBuffer { max_bytes: None },
+            BodyAccessMode::ReadWrite => BodyMode::StreamBuffer {
+                max_bytes: Some(self.cfg.max_buffer_bytes),
+            },
         }
     }
 
@@ -345,14 +353,14 @@ impl HttpFilter for CpexFilter {
         // tokio runtime (praxis `work_stealing: false`). Rather than
         // crash mid-response, refuse to operate up front. After the
         // first request this collapses to a single atomic load.
-        match self.runtime_check.load(Ordering::Relaxed) {
+        match self.runtime_check.load(Ordering::Acquire) {
             RUNTIME_UNCHECKED => {
                 let flavor = tokio::runtime::Handle::current().runtime_flavor();
                 if matches!(flavor, tokio::runtime::RuntimeFlavor::CurrentThread) {
-                    self.runtime_check.store(RUNTIME_REJECTED, Ordering::Relaxed);
+                    self.runtime_check.store(RUNTIME_REJECTED, Ordering::Release);
                     return Err(current_thread_runtime_error());
                 }
-                self.runtime_check.store(RUNTIME_OK, Ordering::Relaxed);
+                self.runtime_check.store(RUNTIME_OK, Ordering::Release);
             },
             RUNTIME_REJECTED => return Err(current_thread_runtime_error()),
             _ => {}, // RUNTIME_OK — fall through.

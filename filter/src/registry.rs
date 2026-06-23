@@ -366,6 +366,8 @@ mod tests {
             names.contains(&"openai_response_store"),
             "response_store should be registered"
         );
+        #[cfg(feature = "cpex")]
+        assert!(names.contains(&"cpex"), "cpex should be registered");
     }
 
     #[test]
