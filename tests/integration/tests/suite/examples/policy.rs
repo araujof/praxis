@@ -3,11 +3,11 @@
 
 //! Functional integration test for the CPEX example config.
 //!
-//! Exercises the `examples/configs/security/cpex.yaml` filter chain
-//! end-to-end: praxis is configured with the `mcp` → `cpex` → `router`
+//! Exercises the `examples/configs/security/policy.yaml` filter chain
+//! end-to-end: praxis is configured with the `mcp` → `policy` → `router`
 //! → `load_balancer` chain. Two cases:
 //!
-//! * **Deny** — a request with no `Authorization` header is rejected with HTTP 401 (the cpex identity gate's
+//! * **Deny** — a request with no `Authorization` header is rejected with HTTP 401 (the policy identity gate's
 //!   `auth_rejection` path).
 //! * **Allow** — a request carrying a valid HS256 JWT (signed with the fixture's shared secret) resolves identity,
 //!   finds no APL route to gate it, and passes through to the backend with HTTP 200.
@@ -66,8 +66,8 @@ fn mint_fixture_jwt(subject: &str) -> String {
 /// reference into an absolute path, then patch ports. Returns a
 /// fully-parsed [`Config`] ready for [`start_proxy`].
 #[expect(clippy::needless_pass_by_value, reason = "callers construct the map inline")]
-fn load_cpex_example(proxy_port: u16, port_map: HashMap<&str, u16>) -> Config {
-    let praxis_yaml_path = example_config_path("security/cpex.yaml");
+fn load_policy_example(proxy_port: u16, port_map: HashMap<&str, u16>) -> Config {
+    let praxis_yaml_path = example_config_path("security/policy.yaml");
     let policy_yaml_path = format!("{}/fixtures/cpex-policy.yaml", env!("CARGO_MANIFEST_DIR"));
 
     let raw = std::fs::read_to_string(&praxis_yaml_path).unwrap_or_else(|e| panic!("read {praxis_yaml_path}: {e}"));
@@ -77,7 +77,7 @@ fn load_cpex_example(proxy_port: u16, port_map: HashMap<&str, u16>) -> Config {
     // constructs regardless of the test's working directory.
     let with_policy = raw.replace("/etc/praxis/cpex-policy.yaml", &policy_yaml_path);
     let patched = patch_yaml(&with_policy, proxy_port, &port_map);
-    Config::from_yaml(&patched).unwrap_or_else(|e| panic!("parse security/cpex.yaml: {e}"))
+    Config::from_yaml(&patched).unwrap_or_else(|e| panic!("parse security/policy.yaml: {e}"))
 }
 
 // -----------------------------------------------------------------------------
@@ -85,14 +85,14 @@ fn load_cpex_example(proxy_port: u16, port_map: HashMap<&str, u16>) -> Config {
 // -----------------------------------------------------------------------------
 
 #[test]
-fn cpex_example_missing_authorization_rejects_401() {
+fn policy_example_missing_authorization_rejects_401() {
     let backend_guard = start_backend_with_shutdown("ok");
     let proxy_port = free_port();
-    let config = load_cpex_example(proxy_port, HashMap::from([("127.0.0.1:3000", backend_guard.port())]));
+    let config = load_policy_example(proxy_port, HashMap::from([("127.0.0.1:3000", backend_guard.port())]));
     let proxy = start_proxy(&config);
 
     // POST with a well-formed MCP body but no Authorization header.
-    // The identity hook chain denies, cpex returns auth_rejection (401
+    // The identity hook chain denies, the policy filter returns auth_rejection (401
     // with WWW-Authenticate + X-Cpex-Violation headers).
     let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#;
     let raw = http_send(
@@ -112,7 +112,7 @@ fn cpex_example_missing_authorization_rejects_401() {
     assert_eq!(
         parse_status(&raw),
         401,
-        "missing Authorization should hit the cpex identity gate; raw response:\n{raw}",
+        "missing Authorization should hit the policy identity gate; raw response:\n{raw}",
     );
     assert!(
         raw.to_lowercase().contains("www-authenticate: bearer"),
@@ -125,14 +125,14 @@ fn cpex_example_missing_authorization_rejects_401() {
 }
 
 #[test]
-fn cpex_example_valid_jwt_passes_through() {
+fn policy_example_valid_jwt_passes_through() {
     let backend_guard = start_backend_with_shutdown("ok");
     let proxy_port = free_port();
-    let config = load_cpex_example(proxy_port, HashMap::from([("127.0.0.1:3000", backend_guard.port())]));
+    let config = load_policy_example(proxy_port, HashMap::from([("127.0.0.1:3000", backend_guard.port())]));
     let proxy = start_proxy(&config);
 
     // Same well-formed MCP body as the deny case, but now carrying a
-    // valid HS256 JWT. The cpex identity gate resolves it, the fixture
+    // valid HS256 JWT. The policy identity gate resolves it, the fixture
     // declares no APL routes so policy dispatch is a no-op, and the
     // request reaches the backend (HTTP 200, body "ok").
     let token = mint_fixture_jwt("alice");

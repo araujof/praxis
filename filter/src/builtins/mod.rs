@@ -18,14 +18,14 @@ pub use http::AnthropicStreamEventsFilter;
 pub use http::AnthropicToOpenaiFilter;
 #[cfg(feature = "ai-inference")]
 pub use http::AnthropicValidateFilter;
-#[cfg(feature = "cpex")]
-pub use http::CpexFilter;
 #[cfg(feature = "ai-inference")]
 pub use http::ModelRewriteFilter;
 #[cfg(feature = "ai-inference")]
 pub use http::ModelToHeaderFilter;
 #[cfg(feature = "ai-inference")]
 pub use http::OpenaiResponsesValidateFilter;
+#[cfg(feature = "cpex-policy-engine")]
+pub use http::PolicyFilter;
 #[cfg(feature = "ai-inference")]
 pub use http::PromptEnrichFilter;
 #[cfg(feature = "ai-inference")]

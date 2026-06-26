@@ -1,11 +1,14 @@
-# CPEX Security Filter
+# Policy Security Filter (experimental)
 #
-# Embeds the CPEX policy runtime in-process to enforce multi-source
-# JWT identity, APL route policy, RFC 8693 OAuth 2.0 token exchange,
-# PII scanning, audit emission, and (under `body_access: read_write`)
+# Embeds the CPEX policy engine in-process to enforce multi-source JWT
+# identity, APL route policy, RFC 8693 OAuth 2.0 token exchange, PII
+# scanning, audit emission, and (under `body_access: read_write`)
 # request / response body rewriting.
 #
-# The cpex filter consumes `mcp.method` / `mcp.name` metadata stashed
+# Experimental: requires the `cpex-policy-engine` cargo feature, which
+# is off by default.
+#
+# The policy filter consumes `mcp.method` / `mcp.name` metadata stashed
 # by praxis's built-in `mcp` filter, which MUST be ordered before it
 # in the chain.
 #
@@ -18,13 +21,14 @@
 # single-HS256-identity-plugin policy the integration test loads.
 #
 # `require_mcp_metadata: true` (the default) fail-closes when the
-# `mcp` filter is missing or ordered after `cpex` — this guards
+# `mcp` filter is missing or ordered after `policy` — this guards
 # against a misconfigured chain silently bypassing policy.
 #
-# This example builds only when the `cpex` cargo feature is enabled:
+# This example builds only when the `cpex-policy-engine` cargo feature
+# is enabled:
 #
-#   cargo run --features cpex -p praxis -- \
-#     -c examples/configs/security/cpex.yaml
+#   cargo run --features cpex-policy-engine -p praxis-proxy -- \
+#     -c examples/configs/security/policy.yaml
 #
 # Exercise (assumes the backend at :3000 echoes 200):
 #
@@ -57,13 +61,13 @@ filter_chains:
     filters:
       - filter: mcp
         # Default mode parses MCP JSON-RPC bodies and stashes
-        # mcp.method / mcp.name in filter_metadata. Must precede cpex.
+        # mcp.method / mcp.name in filter_metadata. Must precede policy.
 
-      - filter: cpex
+      - filter: policy
         config_path: /etc/praxis/cpex-policy.yaml
         # Fail-closed when mcp.method is missing. Set to `false` only
-        # when intentionally fronting non-MCP traffic through cpex for
-        # identity-only enforcement.
+        # when intentionally fronting non-MCP traffic through the policy
+        # filter for identity-only enforcement.
         require_mcp_metadata: true
 
       - filter: router

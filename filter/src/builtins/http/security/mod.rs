@@ -6,8 +6,6 @@
 //! filter.
 
 mod cors;
-#[cfg(feature = "cpex")]
-mod cpex;
 mod credential_injection;
 mod csrf;
 mod forwarded_headers;
@@ -15,12 +13,14 @@ mod guardrails;
 mod ip_acl;
 pub(crate) mod origin_matcher;
 pub(crate) mod origin_normalize;
+#[cfg(feature = "cpex-policy-engine")]
+mod policy;
 
 pub use cors::{CorsFilter, DisallowedOriginMode};
-#[cfg(feature = "cpex")]
-pub use cpex::CpexFilter;
 pub use credential_injection::CredentialInjectionFilter;
 pub use csrf::CsrfFilter;
 pub use forwarded_headers::ForwardedHeadersFilter;
 pub use guardrails::{ContainsValue, GuardrailsAction, GuardrailsFilter, PiiKind, RuleTargetKind};
 pub use ip_acl::IpAclFilter;
+#[cfg(feature = "cpex-policy-engine")]
+pub use policy::PolicyFilter;

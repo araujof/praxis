@@ -17,8 +17,6 @@ mod basic_reverse_proxy;
 mod canary_routing;
 mod circuit_breaker;
 mod conditional_filters;
-#[cfg(feature = "cpex")]
-mod cpex;
 mod credential_injection;
 mod csrf;
 mod default_config;
@@ -50,6 +48,8 @@ mod p2c;
 mod path_based_routing;
 mod path_rewriting;
 mod payload_processing;
+#[cfg(feature = "cpex-policy-engine")]
+mod policy;
 #[cfg(feature = "ai-inference")]
 mod prompt_enrichment;
 mod protocols;

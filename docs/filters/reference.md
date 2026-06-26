@@ -47,12 +47,12 @@ Built-in filters organized by protocol and category.
 | Filter | Feature | Description |
 |--------|---------|-------------|
 | [`cors`](http/security/cors.md) | - | Spec-compliant CORS filter implementing origin validation, preflight handling, and response header injection. |
-| [`cpex`](http/security/cpex.md) | `cpex` | Configuration block for a `cpex` filter slot in a Praxis filter chain. |
 | [`credential_injection`](http/security/credential_injection.md) | - | Injects per-cluster API credentials into upstream requests. |
 | [`csrf`](http/security/csrf.md) | - | CSRF protection filter that validates request origins against a trusted allowlist. |
 | [`forwarded_headers`](http/security/forwarded_headers.md) | - | Injects `X-Forwarded-For`, `X-Forwarded-Proto`, and `X-Forwarded-Host` headers into upstream requests. |
 | [`guardrails`](http/security/guardrails.md) | - | Rejects requests matching string, regex, or PII rules against headers and/or body content. |
 | [`ip_acl`](http/security/ip_acl.md) | - | IP-based access control filter. |
+| [`policy`](http/security/policy.md) | `cpex-policy-engine` | Configuration block for the experimental `policy` filter, which embeds the CPEX policy engine in-process (gated behind the `cpex-policy-engine` feature, off by default). |
 
 ## HTTP / Traffic Management
 

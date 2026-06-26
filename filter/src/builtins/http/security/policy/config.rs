@@ -1,25 +1,27 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Praxis Contributors
 
-//! Deserialized YAML configuration for the CPEX security filter.
+//! Deserialized YAML configuration for the policy security filter.
 
 use serde::Deserialize;
 
 // -----------------------------------------------------------------------------
-// CpexFilterConfig
+// PolicyFilterConfig
 // -----------------------------------------------------------------------------
 
-/// Configuration block for a `cpex` filter slot in a Praxis filter chain.
+/// Configuration block for the experimental `policy` filter, which
+/// embeds the CPEX policy engine in-process (gated behind the
+/// `cpex-policy-engine` feature, off by default).
 ///
 /// Praxis filter configs are flat: the filter's typed fields sit
 /// directly under the `- filter:` entry alongside the structural keys
 /// (`name`, `conditions`), not nested under a `config:` wrapper. See
-/// `examples/configs/security/cpex.yaml` for a runnable example.
+/// `examples/configs/security/policy.yaml` for a runnable example.
 ///
 /// ```yaml
 /// filters:
-///   - filter: cpex
-///     config_path: /etc/praxis/cpex.yaml
+///   - filter: policy
+///     config_path: /etc/praxis/cpex-policy.yaml
 ///     body_access: read_write   # optional; default read_only
 ///     require_mcp_metadata: true
 /// ```
@@ -30,7 +32,7 @@ use serde::Deserialize;
 /// (fail-fast rather than at first request).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CpexFilterConfig {
+pub struct PolicyFilterConfig {
     /// Filesystem path to the CPEX YAML policy document.
     pub config_path: String,
 

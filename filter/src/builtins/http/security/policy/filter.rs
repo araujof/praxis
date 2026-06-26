@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Praxis Contributors
 
-//! `CpexFilter` — embeds the CPEX runtime in-process to resolve and
+//! `PolicyFilter` — embeds the CPEX runtime in-process to resolve and
 //! validate identity, evaluate APL routes, optionally mint delegated
 //! credentials, scan for PII, emit audit records, and optionally
 //! rewrite request/response bodies.
@@ -34,8 +34,8 @@ use cpex::cpex_core::{
 };
 
 use super::{
-    cmf::{entity_for_mcp_method, entity_for_mcp_method_post},
-    config::{BodyAccessMode, CpexFilterConfig},
+    common_message_format::{entity_for_mcp_method, entity_for_mcp_method_post},
+    config::{BodyAccessMode, PolicyFilterConfig},
     error::{VIOLATION_HEADER, auth_rejection, mcp_error_envelope_bytes, mcp_error_rejection},
     json_rpc::{
         build_content_for_method, build_response_content_for_method, json_rpc_id, json_rpc_id_value,
@@ -50,11 +50,11 @@ use crate::{
 };
 
 // -----------------------------------------------------------------------------
-// CpexFilter
+// PolicyFilter
 // -----------------------------------------------------------------------------
 
 // State of the one-shot tokio runtime-flavor check performed on the
-// first request. See `CpexFilter::on_request` for the rationale.
+// first request. See `PolicyFilter::on_request` for the rationale.
 
 /// Initial state — no request has been served yet.
 const RUNTIME_UNCHECKED: u8 = 0;
@@ -63,8 +63,13 @@ const RUNTIME_OK: u8 = 1;
 /// First request saw a current-thread runtime; all requests reject.
 const RUNTIME_REJECTED: u8 = 2;
 
-/// Filter that runs the CPEX identity + APL pipeline against each
-/// request.
+/// Embeds the CPEX policy engine in-process to enforce multi-source JWT
+/// identity, APL route policy, RFC 8693 token exchange, PII
+/// scanning, audit emission, and (under `body_access: read_write`)
+/// request / response body rewriting.
+///
+/// Experimental: requires the `cpex-policy-engine` cargo feature, which
+/// is off by default. Registered under the YAML filter name `policy`.
 ///
 /// A single request can carry multiple identity sources — user JWT in
 /// `Authorization`, agent JWT in `X-Agent-Token`, workload JWT in
@@ -86,22 +91,22 @@ const RUNTIME_REJECTED: u8 = 2;
 /// # YAML configuration
 ///
 /// Filter fields sit directly under the `- filter:` entry; there is no
-/// `config:` wrapper. See `examples/configs/security/cpex.yaml` for a
+/// `config:` wrapper. See `examples/configs/security/policy.yaml` for a
 /// runnable example.
 ///
 /// ```yaml
-/// filter: cpex
-/// config_path: /etc/praxis/cpex.yaml
+/// filter: policy
+/// config_path: /etc/praxis/cpex-policy.yaml
 /// body_access: read_write       # optional; default read_only
 /// require_mcp_metadata: true    # optional; default true
 /// init_timeout_secs: 30         # optional; default 30
 /// max_buffer_bytes: 10485760    # optional; default 10 MiB (read_write only)
 /// ```
-pub struct CpexFilter {
+pub struct PolicyFilter {
     /// Filter-level configuration parsed from the YAML block. Held so
     /// `request_body_access` / `request_body_mode` / their response
     /// counterparts can branch on `body_access` per request.
-    cfg: CpexFilterConfig,
+    cfg: PolicyFilterConfig,
     /// CPEX plugin manager — owns the loaded plugin instances and
     /// dispatches hook chains. Wrapped in `Arc` so the post-phase
     /// `block_in_place` closure can hold its own handle without
@@ -116,7 +121,7 @@ pub struct CpexFilter {
     runtime_check: AtomicU8,
 }
 
-impl CpexFilter {
+impl PolicyFilter {
     /// Construct a filter from a parsed config. Loads the CPEX YAML
     /// referenced by `cfg.config_path`, registers bundled plugin
     /// factories, wires the APL visitor, and initializes the manager.
@@ -128,7 +133,7 @@ impl CpexFilter {
     /// Returns [`FilterError`] if the referenced YAML cannot be read,
     /// the policy document fails to parse, or plugin initialization
     /// fails (e.g., a JWKS endpoint is unreachable).
-    pub fn new(cfg: CpexFilterConfig) -> Result<Self, FilterError> {
+    pub fn new(cfg: PolicyFilterConfig) -> Result<Self, FilterError> {
         let yaml = std::fs::read_to_string(&cfg.config_path).map_err(|e| -> FilterError {
             format!("cpex: failed to read config_path {}: {e}", cfg.config_path).into()
         })?;
@@ -197,9 +202,9 @@ impl CpexFilter {
     /// # Errors
     ///
     /// Returns [`FilterError`] if the config block fails to parse
-    /// as a `CpexFilterConfig` or filter construction fails.
+    /// as a `PolicyFilterConfig` or filter construction fails.
     pub fn from_config(config: &serde_yaml::Value) -> Result<Box<dyn HttpFilter>, FilterError> {
-        let cfg: CpexFilterConfig = parse_filter_config("cpex", config)?;
+        let cfg: PolicyFilterConfig = parse_filter_config("policy", config)?;
         let filter = Self::new(cfg)?;
         Ok(Box::new(filter))
     }
@@ -294,9 +299,9 @@ impl CpexFilter {
 }
 
 #[async_trait]
-impl HttpFilter for CpexFilter {
+impl HttpFilter for PolicyFilter {
     fn name(&self) -> &'static str {
-        "cpex"
+        "policy"
     }
 
     fn request_body_access(&self) -> BodyAccess {

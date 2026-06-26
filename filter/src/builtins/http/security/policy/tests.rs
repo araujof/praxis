@@ -14,7 +14,7 @@ use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::{config::CpexFilterConfig, filter::CpexFilter};
+use super::{config::PolicyFilterConfig, filter::PolicyFilter};
 use crate::{
     FilterAction,
     filter::HttpFilter as _,
@@ -155,7 +155,7 @@ routes:
 
 /// Run a `tools/call` for the `echo` tool as `subject`, returning the
 /// filter's body-phase action. Shared by the CEL allow/deny cases.
-async fn dispatch_echo_as(filter: &CpexFilter, subject: &str) -> FilterAction {
+async fn dispatch_echo_as(filter: &PolicyFilter, subject: &str) -> FilterAction {
     let token = mint_jwt(&standard_claims(subject));
     let mut req = make_request(Method::POST, "/");
     req.headers.insert(
@@ -228,7 +228,7 @@ routes:
 /// `X-Session-Id`. Returns the filter's body-phase action. Threads the
 /// session header so cpex's session-scoped taint store can persist /
 /// hydrate labels across calls.
-async fn dispatch_tool_session(filter: &CpexFilter, subject: &str, tool: &str, session_id: &str) -> FilterAction {
+async fn dispatch_tool_session(filter: &PolicyFilter, subject: &str, tool: &str, session_id: &str) -> FilterAction {
     let token = mint_jwt(&standard_claims(subject));
     let mut req = make_request(Method::POST, "/");
     req.headers.insert(
@@ -359,19 +359,19 @@ routes:
     (dir, path_str)
 }
 
-/// Build a `CpexFilter` from a YAML config path. Defaults
+/// Build a `PolicyFilter` from a YAML config path. Defaults
 /// `require_mcp_metadata` to true so the test surface matches the
 /// production default; individual tests that want to test the
 /// fail-open knob construct their own config.
-fn build_filter(config_path: String) -> CpexFilter {
-    let cfg = CpexFilterConfig {
+fn build_filter(config_path: String) -> PolicyFilter {
+    let cfg = PolicyFilterConfig {
         config_path,
         body_access: super::config::BodyAccessMode::ReadOnly,
         require_mcp_metadata: true,
         init_timeout_secs: 30,
         max_buffer_bytes: 10_485_760,
     };
-    CpexFilter::new(cfg).expect("filter should construct")
+    PolicyFilter::new(cfg).expect("filter should construct")
 }
 
 // =====================================================================
@@ -384,7 +384,7 @@ fn build_filter(config_path: String) -> CpexFilter {
 #[test]
 fn config_parses_minimal_yaml() {
     let yaml = "config_path: /etc/praxis/cpex.yaml";
-    let cfg: CpexFilterConfig = serde_yaml::from_str(yaml).expect("parse");
+    let cfg: PolicyFilterConfig = serde_yaml::from_str(yaml).expect("parse");
     assert_eq!(cfg.config_path, "/etc/praxis/cpex.yaml", "config_path round-trips",);
     assert_eq!(cfg.max_buffer_bytes, 10_485_760, "max_buffer_bytes defaults to 10 MiB",);
 }
@@ -394,7 +394,7 @@ fn config_parses_minimal_yaml() {
 #[test]
 fn config_max_buffer_bytes_override() {
     let yaml = "config_path: /etc/praxis/cpex.yaml\nmax_buffer_bytes: 1048576";
-    let cfg: CpexFilterConfig = serde_yaml::from_str(yaml).expect("parse");
+    let cfg: PolicyFilterConfig = serde_yaml::from_str(yaml).expect("parse");
     assert_eq!(cfg.max_buffer_bytes, 1_048_576, "explicit max_buffer_bytes wins");
 }
 
@@ -404,7 +404,7 @@ fn config_max_buffer_bytes_override() {
 #[test]
 fn config_requires_config_path() {
     let yaml = "{}";
-    let res: Result<CpexFilterConfig, _> = serde_yaml::from_str(yaml);
+    let res: Result<PolicyFilterConfig, _> = serde_yaml::from_str(yaml);
     assert!(res.is_err(), "config_path is mandatory");
 }
 
@@ -595,7 +595,7 @@ fn config_rejects_unknown_fields() {
 config_path: /etc/praxis/cpex.yaml
 body_acces: read_write
 ";
-    let res: Result<CpexFilterConfig, _> = serde_yaml::from_str(yaml);
+    let res: Result<PolicyFilterConfig, _> = serde_yaml::from_str(yaml);
     assert!(res.is_err(), "deny_unknown_fields must reject `body_acces` typo",);
     let msg = format!("{}", res.unwrap_err());
     assert!(
@@ -610,7 +610,7 @@ body_acces: read_write
 #[test]
 fn config_require_mcp_metadata_defaults_to_true() {
     let yaml = "config_path: /etc/praxis/cpex.yaml";
-    let cfg: CpexFilterConfig = serde_yaml::from_str(yaml).expect("parse");
+    let cfg: PolicyFilterConfig = serde_yaml::from_str(yaml).expect("parse");
     assert!(cfg.require_mcp_metadata, "default must be fail-closed");
 }
 
@@ -619,7 +619,7 @@ fn config_require_mcp_metadata_defaults_to_true() {
 #[test]
 fn config_init_timeout_defaults_to_30s() {
     let yaml = "config_path: /etc/praxis/cpex.yaml";
-    let cfg: CpexFilterConfig = serde_yaml::from_str(yaml).expect("parse");
+    let cfg: PolicyFilterConfig = serde_yaml::from_str(yaml).expect("parse");
     assert_eq!(cfg.init_timeout_secs, 30);
 }
 
@@ -628,7 +628,7 @@ fn config_init_timeout_defaults_to_30s() {
 #[test]
 fn config_init_timeout_honors_override() {
     let yaml = "config_path: /etc/praxis/cpex.yaml\ninit_timeout_secs: 5";
-    let cfg: CpexFilterConfig = serde_yaml::from_str(yaml).expect("parse");
+    let cfg: PolicyFilterConfig = serde_yaml::from_str(yaml).expect("parse");
     assert_eq!(cfg.init_timeout_secs, 5);
 }
 
@@ -637,7 +637,7 @@ fn config_init_timeout_honors_override() {
 // plugin has its own JWKS connect/request timeouts plus soft-fail-at-
 // boot, so a hung JWKS endpoint never propagates a hang through
 // `PluginManager::initialize` in the first place. The wrap-timeout in
-// `CpexFilter::new` is defense-in-depth for OTHER init paths (custom
+// `PolicyFilter::new` is defense-in-depth for OTHER init paths (custom
 // plugins, future hooks) where a future could legitimately stall.
 // The unit tests above pin the surface; the timeout's behavior is
 // exercised by `tokio::time::timeout` itself.
@@ -692,14 +692,14 @@ async fn missing_mcp_metadata_rejects_when_required() {
 #[tokio::test(flavor = "multi_thread")]
 async fn missing_mcp_metadata_passes_when_not_required() {
     let (_dir, path) = write_single_plugin_config();
-    let cfg = CpexFilterConfig {
+    let cfg = PolicyFilterConfig {
         config_path: path,
         body_access: super::config::BodyAccessMode::ReadOnly,
         require_mcp_metadata: false,
         init_timeout_secs: 30,
         max_buffer_bytes: 10_485_760,
     };
-    let filter = CpexFilter::new(cfg).expect("filter should construct");
+    let filter = PolicyFilter::new(cfg).expect("filter should construct");
 
     let token = mint_jwt(&standard_claims("alice"));
     let mut req = make_request(Method::POST, "/");
@@ -879,7 +879,7 @@ fn fit_to_original_length_truncates_on_grow() {
 /// The set is closed; any new MCP method needs an explicit decision.
 #[test]
 fn entity_for_mcp_method_covers_known_methods() {
-    use super::cmf::entity_for_mcp_method;
+    use super::common_message_format::entity_for_mcp_method;
     assert!(entity_for_mcp_method("tools/call").is_some());
     assert!(entity_for_mcp_method("prompts/get").is_some());
     assert!(entity_for_mcp_method("resources/read").is_some());
@@ -891,7 +891,7 @@ fn entity_for_mcp_method_covers_known_methods() {
 /// Post-phase mirror — same set of methods, different hooks.
 #[test]
 fn entity_for_mcp_method_post_covers_known_methods() {
-    use super::cmf::entity_for_mcp_method_post;
+    use super::common_message_format::entity_for_mcp_method_post;
     assert!(entity_for_mcp_method_post("tools/call").is_some());
     assert!(entity_for_mcp_method_post("prompts/get").is_some());
     assert!(entity_for_mcp_method_post("resources/read").is_some());
