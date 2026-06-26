@@ -35,6 +35,4 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# CPEX policy-runtime crates (feature-gated behind `--features cpex`).
-# Pinned by exact rev in Cargo.toml until the crates are published.
-allow-git = ["https://github.com/contextforge-org/cpex"]
+allow-git = []
