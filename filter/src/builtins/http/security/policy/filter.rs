@@ -229,33 +229,16 @@ impl PolicyFilter {
         IdentityPayload::new(String::new(), TokenSource::Bearer).with_headers(Self::snapshot_headers(ctx))
     }
 
-    /// Build the `Extensions` to feed CMF dispatch. Re-resolves
-    /// identity (cheap — the JWT verifier hits its in-process key
-    /// cache), applies the resolved subject / roles / claims /
-    /// raw-credentials, and stamps `MetaExtension.entity_type` /
-    /// `entity_name` so route resolution in cpex-core picks the right
-    /// route annotation.
-    #[expect(
-        clippy::large_stack_frames,
-        reason = "async handler holding large CMF Extensions across await points"
-    )]
-    async fn build_cmf_extensions(
-        &self,
-        ctx: &HttpFilterContext<'_>,
-        entity_type: &str,
-        entity_name: &str,
-    ) -> Result<Extensions, Rejection> {
-        // Snapshot the request headers once and reuse them for both
-        // identity resolution and the `x-session-id` lookup below,
-        // rather than cloning the whole header map twice per phase.
-        let headers = Self::snapshot_headers(ctx);
-        let session_id = headers.get("x-session-id").filter(|value| !value.is_empty()).cloned();
-
+    /// Resolve identity by invoking the identity hook chain. Returns the
+    /// resolved [`IdentityPayload`] (subject / client / workload / raw
+    /// credentials / delegation) or a rejection when no identity
+    /// continues. Cheap — the JWT verifier hits its in-process key cache.
+    async fn resolve_identity(&self, ctx: &HttpFilterContext<'_>) -> Result<IdentityPayload, Rejection> {
         let (id_result, _bg) = self
             .mgr
             .invoke_named::<IdentityHook>(
                 HOOK_IDENTITY_RESOLVE,
-                IdentityPayload::new(String::new(), TokenSource::Bearer).with_headers(headers),
+                Self::identity_payload(ctx),
                 Extensions::default(),
                 None,
             )
@@ -263,10 +246,28 @@ impl PolicyFilter {
         if !id_result.continue_processing {
             return Err(auth_rejection(id_result.violation.as_ref()));
         }
-
-        let identity = IdentityPayload::from_pipeline_result(&id_result).ok_or_else(|| {
+        IdentityPayload::from_pipeline_result(&id_result).ok_or_else(|| {
             Rejection::status(500).with_body(Bytes::from_static(b"cpex: identity result missing modified payload"))
-        })?;
+        })
+    }
+
+    /// Build the CMF `Extensions` from an already-resolved identity,
+    /// stamping `MetaExtension.entity_type` / `entity_name` for route
+    /// resolution and threading the `X-Session-Id` header into
+    /// `agent.session_id`.
+    ///
+    /// Pure field-mapping — no token validation, no network — so it is
+    /// safe to call in the response phase against the identity resolved
+    /// in the request phase. That is exactly why the response phase
+    /// reuses the request-phase identity instead of re-running the
+    /// identity hook: a token that expires between the request and the
+    /// (already-served) response must not turn into a false deny.
+    fn extensions_from_identity(
+        ctx: &HttpFilterContext<'_>,
+        identity: &IdentityPayload,
+        entity_type: &str,
+        entity_name: &str,
+    ) -> Extensions {
         let mut ext = identity.apply_to_extensions(Extensions::default());
 
         let mut meta = ext.meta.as_ref().map(|arc| (**arc).clone()).unwrap_or_default();
@@ -280,15 +281,26 @@ impl PolicyFilter {
         // taint labels (`taint(label, session)`) persist across requests
         // in the same conversation and stay isolated between principals.
         // Absent header → cpex falls back to its identity-derived session.
-        if let Some(session_id) = session_id {
+        if let Some(session_id) = Self::snapshot_headers(ctx)
+            .get("x-session-id")
+            .filter(|value| !value.is_empty())
+            .cloned()
+        {
             let mut agent = ext.agent.as_ref().map(|arc| (**arc).clone()).unwrap_or_default();
             agent.session_id = Some(session_id);
             ext.agent = Some(Arc::new(agent));
         }
 
-        Ok(ext)
+        ext
     }
 }
+
+/// Request-scoped carrier for the identity resolved in the request phase,
+/// stashed in [`HttpFilterContext::extensions`] so the response phase can
+/// rebuild `Extensions` without re-validating the (possibly-expired)
+/// token. Held as typed state rather than serialized metadata so the
+/// inbound credentials never land in a plaintext string.
+struct ResolvedIdentity(IdentityPayload);
 
 #[async_trait]
 impl HttpFilter for PolicyFilter {
@@ -440,11 +452,14 @@ impl HttpFilter for PolicyFilter {
             return Ok(FilterAction::BodyDone);
         };
 
-        // Build `Extensions` with re-resolved identity + entity coords.
-        let extensions = match self.build_cmf_extensions(ctx, entity_type, &entity_name).await {
-            Ok(ext) => ext,
+        // Resolve identity once here, then stash it so the response phase
+        // can rebuild `Extensions` without re-validating the token.
+        let identity = match self.resolve_identity(ctx).await {
+            Ok(id) => id,
             Err(rej) => return Ok(FilterAction::Reject(rej)),
         };
+        let extensions = Self::extensions_from_identity(ctx, &identity, entity_type, &entity_name);
+        ctx.extensions.insert(ResolvedIdentity(identity));
 
         // Parse the JSON-RPC body to build the typed CMF content part.
         // praxis's `mcp` filter already parsed once but only stashed
@@ -571,46 +586,41 @@ impl HttpFilter for PolicyFilter {
         let body_bytes = body.as_ref().cloned().unwrap_or_else(Bytes::new);
         let id_str = json_rpc_id(&body_bytes);
 
-        // praxis's `on_response_body` is sync (the Pingora response_body
-        // callback can't be awaited). We're on a tokio worker so
-        // `block_in_place` lets us drive the async CMF dispatch without
-        // stalling other tasks.
-        let extensions = match tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(async { self.build_cmf_extensions(ctx, entity_type, &entity_name).await })
-        }) {
-            Ok(e) => e,
-            Err(_rej) => {
-                // Fail closed, symmetric with the request phase: a
-                // request whose identity can't be resolved is denied,
-                // so a response we can no longer attribute must be
-                // denied too. Passing it through would skip any
-                // configured response-side redaction and leak the
-                // upstream payload. We can't change the already-sent
-                // status/headers, but we can replace the body with a
-                // deny envelope fitted to the committed length.
-                tracing::warn!(
-                    target: "cpex.filter",
-                    method = %method,
-                    entity = %entity_name,
-                    "post-phase identity rebuild failed; failing closed \
-                     (replacing response body with deny envelope)",
-                );
-                let request_id = json_rpc_id_value(&body_bytes);
-                let violation = PluginViolation::new(
-                    "identity.post_phase_unavailable",
-                    "identity could not be re-resolved for response processing",
-                );
-                let envelope = mcp_error_envelope_bytes(Some(&violation), &request_id);
-                *body = Some(fit_to_original_length(
-                    envelope,
-                    body_bytes.len(),
-                    method.as_str(),
-                    "post-phase identity failure",
-                ));
-                return Ok(FilterAction::Continue);
-            },
+        // Rebuild `Extensions` from the identity resolved in the request
+        // phase (stashed in `ctx.extensions`), rather than re-running the
+        // identity hook here. This is a pure, synchronous field-mapping —
+        // no `block_in_place`, no token re-validation — so a token that
+        // expired between the request and this (already-served) response
+        // can't produce a false deny on a request that was authorized.
+        let Some(ResolvedIdentity(identity)) = ctx.extensions.get::<ResolvedIdentity>() else {
+            // Fail closed: a response we can no longer attribute to a
+            // request-phase identity must be denied rather than passed
+            // through, which would skip configured response-side
+            // redaction and leak the upstream payload. We can't change
+            // the already-sent status/headers, but we can replace the
+            // body with a deny envelope fitted to the committed length.
+            tracing::warn!(
+                target: "cpex.filter",
+                method = %method,
+                entity = %entity_name,
+                "no request-phase identity stashed; failing closed \
+                 (replacing response body with deny envelope)",
+            );
+            let request_id = json_rpc_id_value(&body_bytes);
+            let violation = PluginViolation::new(
+                "identity.post_phase_unavailable",
+                "no request-phase identity available for response processing",
+            );
+            let envelope = mcp_error_envelope_bytes(Some(&violation), &request_id);
+            *body = Some(fit_to_original_length(
+                envelope,
+                body_bytes.len(),
+                method.as_str(),
+                "post-phase identity failure",
+            ));
+            return Ok(FilterAction::Continue);
         };
+        let extensions = Self::extensions_from_identity(ctx, identity, entity_type, &entity_name);
 
         let content = build_response_content_for_method(&method, &entity_name, &id_str, &body_bytes);
         if content.is_empty() {

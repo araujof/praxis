@@ -1352,6 +1352,62 @@ fn on_response_body_continues_on_partial_chunks() {
     assert!(matches!(action, FilterAction::Continue));
 }
 
+/// The response phase rebuilds `Extensions` from the identity resolved
+/// in the request phase (stashed in `ctx.extensions`) rather than
+/// re-running the identity hook. With no request-phase identity stashed
+/// it fails closed with a deny envelope instead of re-resolving — so a
+/// token that expires between the request and the already-served
+/// response can never produce a false deny on a request that was
+/// authorized.
+#[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear setup + assertions for the fail-closed response path"
+)]
+async fn response_phase_without_request_identity_fails_closed() {
+    let (_dir, path) = write_single_plugin_config();
+    let cfg = PolicyFilterConfig {
+        config_path: path,
+        body_access: super::config::BodyAccessMode::ReadWrite,
+        require_mcp_metadata: true,
+        init_timeout_secs: 30,
+        max_buffer_bytes: 10_485_760,
+    };
+    let filter = PolicyFilter::new(cfg).expect("filter should construct");
+
+    let req = make_request(Method::POST, "/");
+    let mut ctx = make_filter_context(&req);
+    ctx.set_metadata("mcp.method", "tools/call");
+    ctx.set_metadata("mcp.name", "echo");
+
+    // No `on_request_body` ran on this ctx, so no `ResolvedIdentity` is
+    // stashed. The response body is comfortably larger than the deny
+    // envelope so the envelope fits within the committed length.
+    let original = bytes::Bytes::from(format!(
+        r#"{{"jsonrpc":"2.0","id":1,"result":{{"content":[{{"type":"text","text":"{}"}}]}}}}"#,
+        "x".repeat(256)
+    ));
+    let original_len = original.len();
+    let mut body = Some(original);
+
+    let action = filter
+        .on_response_body(&mut ctx, &mut body, /* end_of_stream= */ true)
+        .expect("hook ran");
+
+    assert!(matches!(action, FilterAction::Continue));
+    let out = body.expect("response body present");
+    assert_eq!(
+        out.len(),
+        original_len,
+        "deny envelope must be fitted to the committed length"
+    );
+    assert!(
+        String::from_utf8_lossy(&out).contains("identity.post_phase_unavailable"),
+        "response body must be the fail-closed deny envelope; got: {}",
+        String::from_utf8_lossy(&out),
+    );
+}
+
 // -----------------------------------------------------------------------------
 // attach_delegated_tokens — outbound header collision handling
 // -----------------------------------------------------------------------------
