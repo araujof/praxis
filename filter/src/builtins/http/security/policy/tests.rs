@@ -21,9 +21,9 @@ use crate::{
     test_utils::{make_filter_context, make_request},
 };
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // Fixtures
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 const TEST_SECRET: &str = "praxis-cpex-test-secret-not-for-production-use";
 const TEST_ISSUER: &str = "https://idp.test.local";
@@ -374,9 +374,9 @@ fn build_filter(config_path: String) -> PolicyFilter {
     PolicyFilter::new(cfg).expect("filter should construct")
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // Config parsing
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// The minimal valid config carries only `config_path:`; all other
 /// fields (`body_access`, `require_mcp_metadata`, `init_timeout_secs`,
@@ -408,9 +408,9 @@ fn config_requires_config_path() {
     assert!(res.is_err(), "config_path is mandatory");
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // Identity-resolution scenarios
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// A YAML config carrying a single identity plugin should construct
 /// without error. Pins the schema we ship — any drift in the
@@ -580,9 +580,9 @@ async fn current_thread_runtime_is_rejected() {
     );
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // Config-schema guards
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// `#[serde(deny_unknown_fields)]` must reject typos like `body_acces`
 /// — without this, the misspelled field is silently dropped, the
@@ -642,9 +642,9 @@ fn config_init_timeout_honors_override() {
 // The unit tests above pin the surface; the timeout's behavior is
 // exercised by `tokio::time::timeout` itself.
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // Fail-closed policy gate (require_mcp_metadata)
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// When `require_mcp_metadata: true` (default) and `mcp.method` is
 /// absent from filter metadata, `on_request_body` rejects with
@@ -719,9 +719,9 @@ async fn missing_mcp_metadata_passes_when_not_required() {
     );
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // Post-phase deny envelope (mcp_error_envelope_bytes)
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// The post-phase deny path replaces the response body with this
 /// envelope when an APL `result:` pipeline denies. The envelope shape
@@ -770,9 +770,9 @@ fn mcp_error_envelope_handles_missing_violation() {
     assert_eq!(parsed["error"]["message"], "denied by gateway");
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // auth_rejection (transport-level 401)
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// `auth_rejection` builds an HTTP 401 with `WWW-Authenticate: Bearer`
 /// and `X-Cpex-Violation:` reflecting the violation code so audit /
@@ -822,9 +822,9 @@ fn auth_rejection_falls_back_to_sentinel_when_no_violation() {
     assert_eq!(viol.expect("X-Cpex-Violation header").1, "auth.unknown");
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // fit_to_original_length (request/response body framing)
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// On shrink, `fit_to_original_length` pads the new body with trailing
 /// ASCII spaces so the wire length equals the original `Content-Length`.
@@ -870,9 +870,9 @@ fn fit_to_original_length_truncates_on_grow() {
     assert_eq!(&*out, &new[..4], "truncation keeps the leading bytes");
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // cmf.rs — MCP method → entity coords
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// Pre-phase mapping returns `(entity_type, pre_hook_name)` for the
 /// MCP methods that carry an entity, `None` for the no-entity methods.
@@ -899,9 +899,9 @@ fn entity_for_mcp_method_post_covers_known_methods() {
     assert!(entity_for_mcp_method_post("initialize").is_none());
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // json_rpc.rs — id extraction + content builders + re-serializers
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// `json_rpc_id` returns the `id` as a string for both string and
 /// numeric ids (CMF correlation needs a single canonical key), and
@@ -1173,9 +1173,9 @@ fn deny_envelope_fits_committed_length() {
     );
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // on_request_body — CMF dispatch path (identity-only policy, no routes)
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// `on_request_body` happy path: valid JWT, `mcp.method=tools/call`,
 /// `mcp.name` set. The identity-only policy has no APL routes, so the
@@ -1307,9 +1307,9 @@ async fn on_request_body_continues_on_partial_chunks() {
     );
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // on_response_body — early returns
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// In default `body_access: read_only`, `on_response_body` returns
 /// `Continue` without doing any work — the operator hasn't opted into
@@ -1352,9 +1352,9 @@ fn on_response_body_continues_on_partial_chunks() {
     assert!(matches!(action, FilterAction::Continue));
 }
 
-// =====================================================================
+// -----------------------------------------------------------------------------
 // attach_delegated_tokens — outbound header collision handling
-// =====================================================================
+// -----------------------------------------------------------------------------
 
 /// Two delegated tokens that both target the same outbound header
 /// are a policy-layering mistake (overlapping delegators). Praxis's

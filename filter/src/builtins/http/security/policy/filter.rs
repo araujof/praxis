@@ -6,18 +6,6 @@
 //! credentials, scan for PII, emit audit records, and optionally
 //! rewrite request/response bodies.
 
-// The orchestration functions in this module (`on_request_body`,
-// `on_response_body`, `new`) coordinate identity resolution, CMF
-// dispatch, delegated-token attachment, and body re-serialization in
-// linear steps. Splitting them to satisfy `too_many_lines` /
-// `cognitive_complexity` would obscure the request/response phase
-// flow without reducing real complexity.
-#![allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    reason = "orchestration functions; splitting obscures phase flow"
-)]
-
 use std::sync::{
     Arc,
     atomic::{AtomicU8, Ordering},
@@ -133,6 +121,10 @@ impl PolicyFilter {
     /// Returns [`FilterError`] if the referenced YAML cannot be read,
     /// the policy document fails to parse, or plugin initialization
     /// fails (e.g., a JWKS endpoint is unreachable).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "linear construction + init steps; splitting obscures the startup flow"
+    )]
     pub fn new(cfg: PolicyFilterConfig) -> Result<Self, FilterError> {
         let yaml = std::fs::read_to_string(&cfg.config_path).map_err(|e| -> FilterError {
             format!("cpex: failed to read config_path {}: {e}", cfg.config_path).into()
@@ -395,7 +387,8 @@ impl HttpFilter for PolicyFilter {
 
     #[expect(
         clippy::large_stack_frames,
-        reason = "async handler with multiple await points over large CMF types"
+        clippy::too_many_lines,
+        reason = "async handler with multiple await points over large CMF types; linear phase flow"
     )]
     async fn on_request_body(
         &self,
@@ -510,8 +503,10 @@ impl HttpFilter for PolicyFilter {
             && let Some(mp) = cmf_result.modified_payload.as_ref()
             && let Some(updated) = mp.as_any().downcast_ref::<MessagePayload>()
         {
-            let original = body.as_ref().cloned().unwrap_or_else(Bytes::new);
-            if let Some(new_bytes) = reserialize_json_rpc_body(&original, &method, &updated.message) {
+            // `body_bytes` (cloned above) still holds the original body —
+            // it has not been reassigned — so reuse it instead of cloning
+            // the buffer a second time.
+            if let Some(new_bytes) = reserialize_json_rpc_body(&body_bytes, &method, &updated.message) {
                 // Praxis recomputes upstream `Content-Length` from the
                 // rewritten body via `mutated_request_body_len` →
                 // `apply_mutated_content_length`, so we ship the bytes
@@ -523,7 +518,7 @@ impl HttpFilter for PolicyFilter {
                     target: "cpex.filter",
                     method = %method,
                     new_len = new_bytes.len(),
-                    original_len = original.len(),
+                    original_len = body_bytes.len(),
                     "rewriting upstream body from mutated MessagePayload",
                 );
                 *body = Some(new_bytes);
@@ -539,6 +534,11 @@ impl HttpFilter for PolicyFilter {
         Ok(FilterAction::BodyDone)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        reason = "linear response-phase flow (rebuild identity, dispatch, deny/rewrite); splitting obscures it"
+    )]
     fn on_response_body(
         &self,
         ctx: &mut HttpFilterContext<'_>,
@@ -645,12 +645,13 @@ impl HttpFilter for PolicyFilter {
                 violation = ?cmf_result.violation,
                 "post-phase deny — replacing response body with JSON-RPC error envelope",
             );
-            let original = body.as_ref().cloned().unwrap_or_else(Bytes::new);
-            let request_id = json_rpc_id_value(&original);
+            // Reuse `body_bytes` (the original response body cloned above);
+            // it has not been reassigned on this path.
+            let request_id = json_rpc_id_value(&body_bytes);
             let envelope = mcp_error_envelope_bytes(cmf_result.violation.as_ref(), &request_id);
             *body = Some(fit_to_original_length(
                 envelope,
-                original.len(),
+                body_bytes.len(),
                 method.as_str(),
                 "post-phase deny",
             ));
@@ -660,9 +661,10 @@ impl HttpFilter for PolicyFilter {
         if let Some(mp) = cmf_result.modified_payload.as_ref()
             && let Some(updated) = mp.as_any().downcast_ref::<MessagePayload>()
         {
-            let original = body.as_ref().cloned().unwrap_or_else(Bytes::new);
-            if let Some(new_bytes) = reserialize_json_rpc_response_body(&original, &method, &updated.message) {
-                let final_bytes = if new_bytes.len() > original.len() {
+            // Reuse `body_bytes` (the original response body cloned above)
+            // rather than cloning the buffer again.
+            if let Some(new_bytes) = reserialize_json_rpc_response_body(&body_bytes, &method, &updated.message) {
+                let final_bytes = if new_bytes.len() > body_bytes.len() {
                     // The rewrite grew the body past the committed
                     // response Content-Length. We can't enlarge the
                     // response, and truncating the redacted payload would
@@ -674,25 +676,25 @@ impl HttpFilter for PolicyFilter {
                         target: "cpex.filter",
                         method = %method,
                         new_len = new_bytes.len(),
-                        original_len = original.len(),
+                        original_len = body_bytes.len(),
                         "response rewrite exceeds committed Content-Length; \
                          failing closed with deny envelope",
                     );
-                    let request_id = json_rpc_id_value(&original);
+                    let request_id = json_rpc_id_value(&body_bytes);
                     let violation = PluginViolation::new(
                         "gateway.response_rewrite_overflow",
                         "response rewrite exceeded the committed response length",
                     );
                     let envelope = mcp_error_envelope_bytes(Some(&violation), &request_id);
-                    fit_to_original_length(envelope, original.len(), method.as_str(), "response rewrite overflow")
+                    fit_to_original_length(envelope, body_bytes.len(), method.as_str(), "response rewrite overflow")
                 } else {
-                    fit_to_original_length(new_bytes, original.len(), method.as_str(), "response-side rewrite")
+                    fit_to_original_length(new_bytes, body_bytes.len(), method.as_str(), "response-side rewrite")
                 };
                 tracing::debug!(
                     target: "cpex.filter",
                     method = %method,
                     new_len = final_bytes.len(),
-                    original_len = original.len(),
+                    original_len = body_bytes.len(),
                     "rewriting downstream response body from mutated MessagePayload",
                 );
                 *body = Some(final_bytes);
@@ -796,6 +798,11 @@ fn missing_mcp_metadata_rejection() -> Rejection {
 /// determined by `HashMap` iteration. Apply first-writer-wins keyed
 /// on `(outbound_header_lc, audience)`, log a warn on each skip so
 /// the operator can fix the overlapping delegators.
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "single linear pass attaching delegated tokens with first-writer-wins dedupe"
+)]
 pub(super) fn attach_delegated_tokens(ctx: &mut HttpFilterContext<'_>, extensions: Option<&Extensions>) -> usize {
     let Some(ext) = extensions else {
         return 0;
@@ -847,7 +854,12 @@ pub(super) fn attach_delegated_tokens(ctx: &mut HttpFilterContext<'_>, extension
             attached_outbound.remove(&outbound_lc);
             continue;
         };
-        let Ok(value) = http::header::HeaderValue::try_from(format!("Bearer {}", tok.token.as_str())) else {
+        // `tok.token` is already `Zeroizing`; keep the freshly-minted
+        // `Bearer …` plaintext in a `Zeroizing` buffer too so it is wiped
+        // as soon as the `HeaderValue` has copied its bytes, rather than
+        // lingering on the heap until the allocator reuses the page.
+        let bearer = zeroize::Zeroizing::new(format!("Bearer {}", tok.token.as_str()));
+        let Ok(value) = http::header::HeaderValue::try_from(bearer.as_str()) else {
             tracing::warn!(
                 target: "cpex.filter",
                 audience = %tok.audience,

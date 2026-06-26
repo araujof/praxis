@@ -33,9 +33,6 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PolicyFilterConfig {
-    /// Filesystem path to the CPEX YAML policy document.
-    pub config_path: String,
-
     /// Body-access tier. `ReadOnly` (default) lets APL inspect request
     /// and response bodies for routing / policy decisions but discards
     /// any mutations. `ReadWrite` enables the CMF → JSON-RPC
@@ -45,24 +42,8 @@ pub struct PolicyFilterConfig {
     #[serde(default)]
     pub body_access: BodyAccessMode,
 
-    /// Fail-closed policy gate for misconfigured chains. When `true`
-    /// (default), `on_request_body` rejects any request that reaches
-    /// it without `mcp.method` filter-metadata. The metadata is set
-    /// by praxis's built-in `mcp` filter, so its absence means either
-    /// (a) the `mcp` filter is missing from the chain, or (b) it is
-    /// ordered AFTER `cpex` instead of before. Either is a
-    /// misconfiguration that would silently bypass CMF/APL policy.
-    ///
-    /// Set to `false` only when intentionally fronting non-MCP
-    /// traffic through `cpex` for identity-only enforcement (legacy
-    /// behavior).
-    ///
-    /// Note: MCP methods that legitimately carry no entity (e.g.
-    /// `tools/list`, `initialize`, `prompts/list`) still pass —
-    /// `require_mcp_metadata` only rejects when the metadata is
-    /// missing entirely.
-    #[serde(default = "default_true")]
-    pub require_mcp_metadata: bool,
+    /// Filesystem path to the CPEX YAML policy document.
+    pub config_path: String,
 
     /// Maximum time, in seconds, to wait for `PluginManager::initialize`
     /// at filter construction. Identity plugins fetch JWKS over HTTPS
@@ -85,6 +66,25 @@ pub struct PolicyFilterConfig {
     /// load, so this always carries a concrete ceiling.
     #[serde(default = "default_max_buffer_bytes")]
     pub max_buffer_bytes: usize,
+
+    /// Fail-closed policy gate for misconfigured chains. When `true`
+    /// (default), `on_request_body` rejects any request that reaches
+    /// it without `mcp.method` filter-metadata. The metadata is set
+    /// by praxis's built-in `mcp` filter, so its absence means either
+    /// (a) the `mcp` filter is missing from the chain, or (b) it is
+    /// ordered AFTER `policy` instead of before. Either is a
+    /// misconfiguration that would silently bypass CMF/APL policy.
+    ///
+    /// Set to `false` only when intentionally fronting non-MCP
+    /// traffic through the `policy` filter for identity-only
+    /// enforcement (legacy behavior).
+    ///
+    /// Note: MCP methods that legitimately carry no entity (e.g.
+    /// `tools/list`, `initialize`, `prompts/list`) still pass —
+    /// `require_mcp_metadata` only rejects when the metadata is
+    /// missing entirely.
+    #[serde(default = "default_true")]
+    pub require_mcp_metadata: bool,
 }
 
 /// `#[serde(default = ...)]` requires a free function for primitives

@@ -25,15 +25,15 @@ use cpex::cpex_core::cmf::{
 /// stringify either to a single canonical key. Returns an empty
 /// string when the body is missing or malformed — the correlation
 /// id isn't load-bearing for policy, only for audit linkage.
+///
+/// Delegates to [`json_rpc_id_value`] so the body is parsed by a single
+/// implementation rather than two independent `from_slice` calls.
 pub(super) fn json_rpc_id(body: &Bytes) -> String {
-    serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v.get("id").cloned())
-        .map(|id| match id {
-            serde_json::Value::String(s) => s,
-            other => other.to_string(),
-        })
-        .unwrap_or_default()
+    match json_rpc_id_value(body) {
+        serde_json::Value::String(s) => s,
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    }
 }
 
 /// Typed companion to [`json_rpc_id`]. Returns the raw `id` JSON value
