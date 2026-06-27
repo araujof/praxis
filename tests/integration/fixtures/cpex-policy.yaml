@@ -1,10 +1,10 @@
-# CPEX policy fixture for the `security/cpex.yaml` example integration
+# CPEX policy fixture for the `security/policy.yaml` example integration
 # test. The example itself points `config_path` at an operator-supplied
-# deployment path; the test rewrites that to this file so the cpex
+# deployment path; the test rewrites that to this file so the policy
 # filter constructs against a real policy without shipping one under
 # examples/.
 #
-# Minimal shape: one HS256 JWT identity plugin, no routes. The cpex
+# Minimal shape: one HS256 JWT identity plugin, no routes. The policy
 # filter resolves identity in on_request (deny on missing/invalid
 # JWT); on_request_body sees no APL route annotations, so policy
 # dispatch is a no-op and the request passes through.

@@ -127,14 +127,14 @@ impl PolicyFilter {
     )]
     pub fn new(cfg: PolicyFilterConfig) -> Result<Self, FilterError> {
         let yaml = std::fs::read_to_string(&cfg.config_path).map_err(|e| -> FilterError {
-            format!("cpex: failed to read config_path {}: {e}", cfg.config_path).into()
+            format!("policy: failed to read config_path {}: {e}", cfg.config_path).into()
         })?;
 
         let mgr = Arc::new(PluginManager::default());
         cpex::install_builtins(&mgr);
 
         mgr.load_config_yaml(&yaml)
-            .map_err(|e: Box<PluginError>| -> FilterError { format!("cpex: load_config_yaml failed: {e}").into() })?;
+            .map_err(|e: Box<PluginError>| -> FilterError { format!("policy: load_config_yaml failed: {e}").into() })?;
 
         // `initialize()` is async. The praxis filter-factory signature
         // is sync, so we drive init to completion here. We spawn a
@@ -157,13 +157,13 @@ impl PolicyFilter {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .map_err(|e| format!("cpex: failed to build init runtime: {e}"))?;
+                .map_err(|e| format!("policy: failed to build init runtime: {e}"))?;
             rt.block_on(async move {
                 match tokio::time::timeout(init_timeout, mgr_for_init.initialize()).await {
                     Ok(Ok(())) => Ok(()),
-                    Ok(Err(e)) => Err(format!("cpex: PluginManager::initialize failed: {e}")),
+                    Ok(Err(e)) => Err(format!("policy: PluginManager::initialize failed: {e}")),
                     Err(_) => Err(format!(
-                        "cpex: PluginManager::initialize timed out after {}s \
+                        "policy: PluginManager::initialize timed out after {}s \
                          (init_timeout_secs); likely a JWKS / OAuth endpoint is unreachable",
                         init_timeout.as_secs(),
                     )),
@@ -177,7 +177,7 @@ impl PolicyFilter {
                 .map(|s| (*s).to_owned())
                 .or_else(|| panic.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "<no panic message>".to_owned());
-            format!("cpex: PluginManager::initialize panicked in init thread: {msg}")
+            format!("policy: PluginManager::initialize panicked in init thread: {msg}")
         })?;
         init.map_err(|s: String| -> FilterError { s.into() })?;
 
@@ -247,7 +247,7 @@ impl PolicyFilter {
             return Err(auth_rejection(id_result.violation.as_ref()));
         }
         IdentityPayload::from_pipeline_result(&id_result).ok_or_else(|| {
-            Rejection::status(500).with_body(Bytes::from_static(b"cpex: identity result missing modified payload"))
+            Rejection::status(500).with_body(Bytes::from_static(b"policy: identity result missing modified payload"))
         })
     }
 
@@ -389,11 +389,11 @@ impl HttpFilter for PolicyFilter {
             .await;
 
         if !result.continue_processing {
-            tracing::debug!(target: "cpex.filter", "identity deny (on_request)");
+            tracing::debug!(target: "policy.filter", "identity deny (on_request)");
             return Ok(FilterAction::Reject(auth_rejection(result.violation.as_ref())));
         }
 
-        tracing::trace!(target: "cpex.filter", "identity allow (on_request)");
+        tracing::trace!(target: "policy.filter", "identity allow (on_request)");
         Ok(FilterAction::Continue)
     }
 
@@ -418,26 +418,26 @@ impl HttpFilter for PolicyFilter {
         // Pull MCP-derived entity coords from durable filter_metadata.
         // Missing `mcp.method` means praxis's built-in `mcp` filter
         // didn't run before us — almost always a misconfigured chain
-        // (missing or ordered after `cpex`). Default to fail-closed
+        // (missing or ordered after `policy`). Default to fail-closed
         // so the misconfig is loud at first request. Operators
         // fronting non-MCP traffic can opt out via
         // `require_mcp_metadata: false`.
         let Some(method) = ctx.get_metadata("mcp.method").map(str::to_owned) else {
             if self.cfg.require_mcp_metadata {
                 tracing::warn!(
-                    target: "cpex.filter",
+                    target: "policy.filter",
                     "no mcp.method in metadata — likely the `mcp` filter is missing \
-                     or ordered after `cpex` in the chain; rejecting (set \
+                     or ordered after `policy` in the chain; rejecting (set \
                      `require_mcp_metadata: false` to disable this guard)",
                 );
                 return Ok(FilterAction::Reject(missing_mcp_metadata_rejection()));
             }
-            tracing::trace!(target: "cpex.filter", "no mcp.method in metadata; no CMF dispatch");
+            tracing::trace!(target: "policy.filter", "no mcp.method in metadata; no CMF dispatch");
             return Ok(FilterAction::BodyDone);
         };
         let Some((entity_type, hook_name)) = entity_for_mcp_method(&method) else {
             tracing::trace!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 mcp_method = %method,
                 "MCP method has no entity binding; no CMF dispatch",
             );
@@ -445,7 +445,7 @@ impl HttpFilter for PolicyFilter {
         };
         let Some(entity_name) = ctx.get_metadata("mcp.name").map(str::to_owned) else {
             tracing::debug!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 mcp_method = %method,
                 "MCP method missing mcp.name metadata; skipping CMF dispatch",
             );
@@ -485,7 +485,7 @@ impl HttpFilter for PolicyFilter {
         if !cmf_result.continue_processing {
             let request_id = json_rpc_id_value(&body_bytes);
             tracing::debug!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 hook = %hook_name,
                 entity = %entity_name,
                 "CMF deny",
@@ -504,7 +504,7 @@ impl HttpFilter for PolicyFilter {
         let attached = attach_delegated_tokens(ctx, cmf_result.modified_extensions.as_ref());
         if attached > 0 {
             tracing::debug!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 count = attached,
                 "attached delegated tokens to upstream request",
             );
@@ -530,7 +530,7 @@ impl HttpFilter for PolicyFilter {
                 // hash, and the response-path pad-on-shrink (where
                 // `Content-Length` IS frozen) is unaffected.
                 tracing::debug!(
-                    target: "cpex.filter",
+                    target: "policy.filter",
                     method = %method,
                     new_len = new_bytes.len(),
                     original_len = body_bytes.len(),
@@ -541,7 +541,7 @@ impl HttpFilter for PolicyFilter {
         }
 
         tracing::trace!(
-            target: "cpex.filter",
+            target: "policy.filter",
             hook = %hook_name,
             entity = %entity_name,
             "CMF allow",
@@ -600,7 +600,7 @@ impl HttpFilter for PolicyFilter {
             // the already-sent status/headers, but we can replace the
             // body with a deny envelope fitted to the committed length.
             tracing::warn!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 method = %method,
                 entity = %entity_name,
                 "no request-phase identity stashed; failing closed \
@@ -649,7 +649,7 @@ impl HttpFilter for PolicyFilter {
         // response body, so padding is the common case).
         if !cmf_result.continue_processing {
             tracing::warn!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 method = %method,
                 entity = %entity_name,
                 violation = ?cmf_result.violation,
@@ -683,7 +683,7 @@ impl HttpFilter for PolicyFilter {
                     // client gets a clean error rather than a mangled
                     // (and potentially under-redacted) body.
                     tracing::warn!(
-                        target: "cpex.filter",
+                        target: "policy.filter",
                         method = %method,
                         new_len = new_bytes.len(),
                         original_len = body_bytes.len(),
@@ -701,7 +701,7 @@ impl HttpFilter for PolicyFilter {
                     fit_to_original_length(new_bytes, body_bytes.len(), method.as_str(), "response-side rewrite")
                 };
                 tracing::debug!(
-                    target: "cpex.filter",
+                    target: "policy.filter",
                     method = %method,
                     new_len = final_bytes.len(),
                     original_len = body_bytes.len(),
@@ -722,7 +722,7 @@ impl HttpFilter for PolicyFilter {
 /// into a current-thread tokio runtime. Hoisted into a helper so the
 /// first-request and cached-rejection branches return identical text.
 fn current_thread_runtime_error() -> FilterError {
-    "cpex filter requires a multi-threaded tokio runtime \
+    "policy filter requires a multi-threaded tokio runtime \
      (server config `work_stealing: true`); current-thread runtime \
      is unsupported because response-phase body transformation \
      requires `block_in_place`"
@@ -761,7 +761,7 @@ pub(super) fn fit_to_original_length(new_bytes: Bytes, original_len: usize, meth
         std::cmp::Ordering::Equal => new_bytes,
         std::cmp::Ordering::Greater => {
             tracing::warn!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 method = %method,
                 new_len = new_bytes.len(),
                 original_len,
@@ -782,8 +782,8 @@ fn missing_mcp_metadata_rejection() -> Rejection {
         .with_header("Content-Type", "text/plain")
         .with_header(VIOLATION_HEADER, "config.missing_mcp_metadata")
         .with_body(Bytes::from_static(
-            b"cpex: no mcp.method in filter metadata. The `mcp` filter must \
-              be present in the chain and ordered before `cpex`. Set the \
+            b"policy: no mcp.method in filter metadata. The `mcp` filter must \
+              be present in the chain and ordered before `policy`. Set the \
               filter's `require_mcp_metadata: false` to disable this guard \
               for non-MCP traffic.",
         ))
@@ -847,7 +847,7 @@ pub(super) fn attach_delegated_tokens(ctx: &mut HttpFilterContext<'_>, extension
             // (two delegators racing for the same header is almost
             // always a mistake in route/global config layering).
             tracing::warn!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 outbound_header = %tok.outbound_header,
                 audience = %tok.audience,
                 "skipping delegated token: another token already targets this outbound header \
@@ -857,7 +857,7 @@ pub(super) fn attach_delegated_tokens(ctx: &mut HttpFilterContext<'_>, extension
         }
         let Ok(name) = http::header::HeaderName::try_from(tok.outbound_header.as_str()) else {
             tracing::warn!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 header = %tok.outbound_header,
                 "delegated token outbound_header is not a valid HTTP header name; skipping",
             );
@@ -871,7 +871,7 @@ pub(super) fn attach_delegated_tokens(ctx: &mut HttpFilterContext<'_>, extension
         let bearer = zeroize::Zeroizing::new(format!("Bearer {}", tok.token.as_str()));
         let Ok(value) = http::header::HeaderValue::try_from(bearer.as_str()) else {
             tracing::warn!(
-                target: "cpex.filter",
+                target: "policy.filter",
                 audience = %tok.audience,
                 "minted token bytes are not a valid HTTP header value; skipping",
             );
@@ -896,7 +896,7 @@ pub(super) fn attach_delegated_tokens(ctx: &mut HttpFilterContext<'_>, extension
                 ctx.request_headers_to_remove.push(n);
             } else {
                 tracing::warn!(
-                    target: "cpex.filter",
+                    target: "policy.filter",
                     header = %inbound.source_header,
                     "inbound source_header is not a valid HTTP header name; cannot strip",
                 );

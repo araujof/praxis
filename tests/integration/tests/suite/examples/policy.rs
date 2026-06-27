@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Teryl Taylor
 
-//! Functional integration test for the CPEX example config.
+//! Functional integration test for the policy example config.
 //!
 //! Exercises the `examples/configs/security/policy.yaml` filter chain
 //! end-to-end: praxis is configured with the `mcp` → `policy` → `router`
@@ -62,7 +62,7 @@ fn mint_fixture_jwt(subject: &str) -> String {
 // Helpers
 // -----------------------------------------------------------------------------
 
-/// Load the CPEX praxis example, patch the relative `config_path`
+/// Load the policy praxis example, patch the relative `config_path`
 /// reference into an absolute path, then patch ports. Returns a
 /// fully-parsed [`Config`] ready for [`start_proxy`].
 #[expect(clippy::needless_pass_by_value, reason = "callers construct the map inline")]
