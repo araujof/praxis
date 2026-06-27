@@ -94,8 +94,8 @@
 //!
 //! | Outcome | Wire shape |
 //! |---|---|
-//! | Identity / transport failure | HTTP 401, `WWW-Authenticate: Bearer`, `X-Cpex-Violation: <code>`. |
-//! | Policy deny (PDP, predicate, PII, taint, delegation) | HTTP 200 with a JSON-RPC error envelope (`code -32001`) and `X-Cpex-Violation: <code>` — per the MCP Tools spec, gateway denials are JSON-RPC errors, not HTTP 4xx. |
+//! | Identity / transport failure | HTTP 401, `WWW-Authenticate: Bearer`, `X-Policy-Violation: <code>`. |
+//! | Policy deny (PDP, predicate, PII, taint, delegation) | HTTP 200 with a JSON-RPC error envelope (`code -32001`) and `X-Policy-Violation: <code>` — per the MCP Tools spec, gateway denials are JSON-RPC errors, not HTTP 4xx. |
 //! | Missing `mcp.method` metadata | HTTP 500 (server-side misconfiguration). |
 //!
 //! # Runtime requirement

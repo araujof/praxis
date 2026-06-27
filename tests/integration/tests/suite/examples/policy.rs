@@ -93,7 +93,7 @@ fn policy_example_missing_authorization_rejects_401() {
 
     // POST with a well-formed MCP body but no Authorization header.
     // The identity hook chain denies, the policy filter returns auth_rejection (401
-    // with WWW-Authenticate + X-Cpex-Violation headers).
+    // with WWW-Authenticate + X-Policy-Violation headers).
     let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}"#;
     let raw = http_send(
         proxy.addr(),
@@ -119,8 +119,8 @@ fn policy_example_missing_authorization_rejects_401() {
         "401 must carry WWW-Authenticate per MCP auth spec; raw response:\n{raw}",
     );
     assert!(
-        raw.to_lowercase().contains("x-cpex-violation:"),
-        "rejection should surface the violation code via X-Cpex-Violation; raw response:\n{raw}",
+        raw.to_lowercase().contains("x-policy-violation:"),
+        "rejection should surface the violation code via X-Policy-Violation; raw response:\n{raw}",
     );
 }
 

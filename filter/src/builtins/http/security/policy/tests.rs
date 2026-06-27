@@ -499,7 +499,7 @@ async fn tampered_jwt_signature_rejects_401() {
 
 /// Auth rejections must carry the MCP-spec-required
 /// `WWW-Authenticate: Bearer` header so MCP clients know to retry
-/// with credentials, plus our `X-Cpex-Violation` diagnostic header.
+/// with credentials, plus our `X-Policy-Violation` diagnostic header.
 #[tokio::test(flavor = "multi_thread")]
 async fn auth_rejection_carries_diagnostic_headers() {
     let (_dir, path) = write_single_plugin_config();
@@ -522,8 +522,8 @@ async fn auth_rejection_carries_diagnostic_headers() {
     let violation = rej
         .headers
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("X-Cpex-Violation"));
-    assert!(violation.is_some(), "X-Cpex-Violation header is expected");
+        .find(|(name, _)| name.eq_ignore_ascii_case("X-Policy-Violation"));
+    assert!(violation.is_some(), "X-Policy-Violation header is expected");
 }
 
 /// The PR1 multi-source story: one request carries a user JWT in
@@ -648,7 +648,7 @@ fn config_init_timeout_honors_override() {
 
 /// When `require_mcp_metadata: true` (default) and `mcp.method` is
 /// absent from filter metadata, `on_request_body` rejects with
-/// HTTP 500 + `X-Cpex-Violation: config.missing_mcp_metadata`. This
+/// HTTP 500 + `X-Policy-Violation: config.missing_mcp_metadata`. This
 /// catches a misconfigured chain (mcp filter missing or ordered after
 /// cpex) loudly at the first body-phase request.
 #[tokio::test(flavor = "multi_thread")]
@@ -674,7 +674,7 @@ async fn missing_mcp_metadata_rejects_when_required() {
             let violation = rej
                 .headers
                 .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("X-Cpex-Violation"));
+                .find(|(name, _)| name.eq_ignore_ascii_case("X-Policy-Violation"));
             assert!(violation.is_some(), "violation header expected");
             assert_eq!(
                 violation.unwrap().1,
@@ -775,7 +775,7 @@ fn mcp_error_envelope_handles_missing_violation() {
 // -----------------------------------------------------------------------------
 
 /// `auth_rejection` builds an HTTP 401 with `WWW-Authenticate: Bearer`
-/// and `X-Cpex-Violation:` reflecting the violation code so audit /
+/// and `X-Policy-Violation:` reflecting the violation code so audit /
 /// middleware can classify without parsing the body. Body carries the
 /// short `code: reason` diagnostic.
 #[test]
@@ -797,8 +797,8 @@ fn auth_rejection_shape_when_violation_present() {
     let viol = rej
         .headers
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("X-Cpex-Violation"));
-    assert_eq!(viol.expect("X-Cpex-Violation header").1, "auth.invalid_token");
+        .find(|(k, _)| k.eq_ignore_ascii_case("X-Policy-Violation"));
+    assert_eq!(viol.expect("X-Policy-Violation header").1, "auth.invalid_token");
 
     let body_bytes = rej.body.as_ref().expect("body present");
     let body = std::str::from_utf8(body_bytes).expect("utf8 body");
@@ -818,8 +818,8 @@ fn auth_rejection_falls_back_to_sentinel_when_no_violation() {
     let viol = rej
         .headers
         .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("X-Cpex-Violation"));
-    assert_eq!(viol.expect("X-Cpex-Violation header").1, "auth.unknown");
+        .find(|(k, _)| k.eq_ignore_ascii_case("X-Policy-Violation"));
+    assert_eq!(viol.expect("X-Policy-Violation header").1, "auth.unknown");
 }
 
 // -----------------------------------------------------------------------------

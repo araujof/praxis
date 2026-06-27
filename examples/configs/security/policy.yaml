@@ -33,7 +33,7 @@
 # Exercise (assumes the backend at :3000 echoes 200):
 #
 #   # Missing Authorization → 401 with WWW-Authenticate and
-#   # X-Cpex-Violation header:
+#   # X-Policy-Violation header:
 #   curl -i -X POST http://localhost:8080/mcp \
 #     -H "Content-Type: application/json" \
 #     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",

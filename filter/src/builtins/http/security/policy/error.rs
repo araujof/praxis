@@ -35,7 +35,7 @@ const MCP_GATEWAY_DENIED_CODE: i64 = -32001;
 /// the API contract). The codes themselves are minor information
 /// disclosure — they name the rule that fired but never carry user
 /// data or claims; acceptable on the deny path.
-pub(super) const VIOLATION_HEADER: &str = "X-Cpex-Violation";
+pub(super) const VIOLATION_HEADER: &str = "X-Policy-Violation";
 
 /// Build an HTTP 401 rejection for transport-level authentication
 /// failures (missing / invalid / wrong-audience JWT). Per the MCP
