@@ -3,8 +3,6 @@
 
 # `policy`
 
-> **Warning**: Experimental feature, requires `cpex-policy-engine` crate feature.
-
 Configuration block for the experimental `policy` filter, which embeds the CPEX policy engine in-process (gated behind the `cpex-policy-engine` feature, off by default).
 
 Requires Cargo feature: `cpex-policy-engine`.
