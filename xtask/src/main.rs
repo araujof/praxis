@@ -24,6 +24,7 @@ mod lint_deps;
 mod lint_example_tests;
 mod port;
 mod sync_example_readme;
+mod transpile_authpolicy;
 
 use clap::{Parser, Subcommand};
 
@@ -76,6 +77,10 @@ enum Command {
 
     /// Check that filter doc files are up to date.
     LintFilterDocs(filter_docs::LintArgs),
+
+    /// Transpile Kuadrant `AuthPolicy` resources into Praxis policy-filter
+    /// configuration + a CPEX policy document (offline, best-effort).
+    TranspileAuthpolicy(transpile_authpolicy::Args),
 }
 
 // -----------------------------------------------------------------------------
@@ -95,6 +100,7 @@ fn main() {
         Command::SyncExampleReadme(args) => sync_example_readme::run(&args),
         Command::GenerateFilterDocs(args) => filter_docs::generate(args),
         Command::LintFilterDocs(args) => filter_docs::lint(args),
+        Command::TranspileAuthpolicy(args) => transpile_authpolicy::run(&args),
     }
 }
 
