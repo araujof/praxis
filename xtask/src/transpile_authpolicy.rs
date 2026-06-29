@@ -175,3 +175,100 @@ fn print_artifacts(slug: &str, out: &translate::Transpiled) {
     println!("# --- Coverage report ---");
     println!("{}", out.report.render());
 }
+
+// -----------------------------------------------------------------------------
+// Golden tests (U11)
+// -----------------------------------------------------------------------------
+//
+// Each corpus AuthPolicy under `tests/fixtures/authpolicy/<name>.yaml` is
+// transpiled and compared against a committed `<name>.golden`. Set
+// `AUTHPOLICY_BLESS=1` to regenerate the golden files after an intentional
+// change. Invariant assertions guard against a wrong bless silently passing.
+
+#[cfg(test)]
+mod golden_tests {
+    #![allow(
+        clippy::panic,
+        clippy::indexing_slicing,
+        reason = "panic and indexing are idiomatic in test assertions"
+    )]
+
+    use crate::authpolicy::{model, translate};
+
+    const FIXTURES: [&str; 3] = ["jwt-rbac", "apikey-opa", "gateway-defaults"];
+
+    fn fixture_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/authpolicy")
+    }
+
+    fn transpile_fixture(name: &str) -> translate::Transpiled {
+        let yaml = std::fs::read_to_string(fixture_dir().join(format!("{name}.yaml")))
+            .unwrap_or_else(|e| panic!("read {name}.yaml: {e}"));
+        let policies = model::parse_documents(&yaml).expect("parse corpus");
+        assert_eq!(policies.len(), 1, "corpus fixtures hold one document");
+        translate::transpile(&policies[0], name)
+    }
+
+    fn combined(out: &translate::Transpiled) -> String {
+        format!(
+            "# == CPEX policy document ==\n{}\n# == Praxis filter block ==\n{}\n# == Coverage report ==\n{}",
+            out.cpex_doc,
+            out.filter_block,
+            out.report.render()
+        )
+    }
+
+    #[test]
+    fn corpus_matches_golden() {
+        let bless = std::env::var_os("AUTHPOLICY_BLESS").is_some();
+        for name in FIXTURES {
+            let out = transpile_fixture(name);
+            let actual = combined(&out);
+            let golden_path = fixture_dir().join(format!("{name}.golden"));
+            if bless {
+                std::fs::write(&golden_path, &actual).expect("write golden");
+                continue;
+            }
+            let expected = std::fs::read_to_string(&golden_path)
+                .unwrap_or_else(|e| panic!("read {name}.golden: {e} (run with AUTHPOLICY_BLESS=1 to create)"));
+            assert_eq!(
+                actual, expected,
+                "golden mismatch for `{name}` (AUTHPOLICY_BLESS=1 to update)"
+            );
+        }
+    }
+
+    /// Round-trip: every emitted CPEX document must parse in the real
+    /// cpex-core (0.2.0) — proves the emitted shape actually loads, not just
+    /// that it matches a golden string.
+    #[test]
+    fn emitted_cpex_doc_parses_in_cpex_core() {
+        for name in FIXTURES {
+            let out = transpile_fixture(name);
+            cpex_core::config::parse_config(&out.cpex_doc)
+                .unwrap_or_else(|e| panic!("emitted CPEX doc for `{name}` failed cpex-core parse: {e}"));
+        }
+    }
+
+    #[test]
+    fn invariants_guard_the_golden() {
+        // jwt-rbac: JWT + CEL authz translate; not fail-closed.
+        let rbac = transpile_fixture("jwt-rbac");
+        assert!(rbac.cpex_doc.contains("kind: identity/jwt"));
+        assert!(rbac.cpex_doc.contains("'admin' in claim.realm_access.roles"));
+        assert!(rbac.cpex_doc.contains("http.method == 'POST'"));
+        assert!(!rbac.report.has_fatal(), "jwt-rbac should not fail closed");
+
+        // apikey-opa: only authz is OPA (unsupported) → fail-closed deny-all.
+        let opa = transpile_fixture("apikey-opa");
+        assert!(opa.report.has_fatal(), "OPA-only authz must fail closed");
+        assert!(opa.cpex_doc.contains("require(false)"));
+
+        // gateway-defaults: defaults block + jwksUrl jwt + email-verified authz.
+        let gw = transpile_fixture("gateway-defaults");
+        assert!(gw.cpex_doc.contains("kind: identity/jwt"));
+        assert!(gw.cpex_doc.contains("claim.email_verified == true"));
+        assert!(gw.report.entries.iter().any(|e| e.construct.starts_with("metadata/")));
+        assert!(gw.report.entries.iter().any(|e| e.construct.starts_with("callbacks/")));
+    }
+}

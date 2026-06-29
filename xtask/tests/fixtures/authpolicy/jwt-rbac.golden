@@ -1,0 +1,57 @@
+# == CPEX policy document ==
+plugin_settings:
+  routing_enabled: true
+plugins:
+- name: keycloak-jwt
+  kind: identity/jwt
+  hooks:
+  - identity.resolve
+  on_error: fail
+  config:
+    header: Authorization
+    trusted_issuers:
+    - issuer: https://keycloak.example.com/realms/myrealm
+      algorithms:
+      - RS256
+      - ES256
+      decoding_key:
+        kind: jwks_url
+        url: https://keycloak.example.com/realms/myrealm
+    claim_mapper: standard
+routes:
+- tool: '*'
+  identity:
+  - keycloak-jwt
+  when: (!http.path.startsWith('/public'))
+  policy:
+  - require(!((http.method == 'GET')) || ((('admin' in claim.realm_access.roles)) && (claim.email_verified)))
+  - require(!(((http.method == 'POST') || (http.method == 'DELETE'))) || ((('admin' in claim.realm_access.roles))))
+
+# == Praxis filter block ==
+filter: policy
+config_path: /etc/praxis/jwt-rbac-cpex-policy.yaml
+enforcement: http
+
+# == Coverage report ==
+AuthPolicy → Praxis coverage report
+===================================
+translated: 4   approximated: 4   skipped: 1
+
+[INFO ] skipped       spec.targetRef
+          Gateway API binding is not translated; wire the emitted filter block into a Praxis chain manually.
+[INFO ] translated    authentication/keycloak-jwt
+          JWT → identity/jwt (algorithms pinned to RS256/ES256 by default; supply explicit algorithms upstream if narrower).
+[WARN ] approximated  authentication/keycloak-jwt
+          issuerUrl maps to OIDC discovery, which CPEX identity/jwt does not perform; set decoding_key.url to the IdP's JWKS endpoint.
+[INFO ] translated    authorization/members-can-read
+          patternMatching → APL require(<CEL>).
+[INFO ] translated    authorization/writes-need-admin
+          patternMatching → APL require(<CEL>).
+[WARN ] approximated  authentication (claims)
+          a rule references a nested identity claim (e.g. Keycloak realm_access.roles); the `standard` claim mapper does not surface nested claims as usable keys (needs Phase B U14).
+[WARN ] approximated  response.unauthenticated
+          custom unauthenticated denyWith (status/body/headers) is not carried; identity failure returns a default 401 until Phase B (U2/U7).
+[WARN ] approximated  response.unauthorized
+          custom unauthorized denyWith (status/body/headers) is not carried; authz denial uses a default status until Phase B (U2/U7).
+[INFO ] translated    spec.when
+          policy activation condition → route `when` guard.

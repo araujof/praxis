@@ -1,0 +1,52 @@
+# == CPEX policy document ==
+plugin_settings:
+  routing_enabled: true
+plugins:
+- name: jwt-internal
+  kind: identity/jwt
+  hooks:
+  - identity.resolve
+  on_error: fail
+  config:
+    header: Authorization
+    trusted_issuers:
+    - issuer: ''
+      algorithms:
+      - RS256
+      - ES256
+      decoding_key:
+        kind: jwks_url
+        url: https://sso.internal.example.com/jwks
+    claim_mapper: standard
+routes:
+- tool: '*'
+  identity:
+  - jwt-internal
+  when: (http.host.endsWith('.internal.example.com'))
+  policy:
+  - require(((claim.email_verified == true)))
+
+# == Praxis filter block ==
+filter: policy
+config_path: /etc/praxis/gateway-defaults-cpex-policy.yaml
+enforcement: http
+
+# == Coverage report ==
+AuthPolicy → Praxis coverage report
+===================================
+translated: 3   approximated: 1   skipped: 3
+
+[INFO ] skipped       spec.targetRef
+          Gateway API binding is not translated; wire the emitted filter block into a Praxis chain manually.
+[WARN ] approximated  spec.defaults/overrides
+          defaults/overrides hierarchy is not resolved; translated as a single flat policy.
+[INFO ] translated    authentication/jwt-internal
+          JWT → identity/jwt (algorithms pinned to RS256/ES256 by default; supply explicit algorithms upstream if narrower).
+[INFO ] translated    authorization/email-verified
+          patternMatching → APL require(<CEL>).
+[WARN ] skipped       metadata/user-profile
+          external metadata fetch is not translated this iteration (best-effort APL bridge is Phase B).
+[WARN ] skipped       callbacks/audit-log
+          post-auth callbacks are not translated this iteration (best-effort APL bridge is Phase B).
+[INFO ] translated    spec.when
+          policy activation condition → route `when` guard.

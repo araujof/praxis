@@ -6155,6 +6155,7 @@ dependencies = [
  "benchmarks",
  "chrono",
  "clap",
+ "cpex-core",
  "nix",
  "plotters",
  "praxis-proxy",
