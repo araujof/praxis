@@ -14,6 +14,7 @@
 )]
 #![allow(let_underscore_drop, reason = "development tooling")]
 
+mod authpolicy;
 mod benchmark;
 mod debug;
 mod echo;
