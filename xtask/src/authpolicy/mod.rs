@@ -19,5 +19,18 @@
 // Deserialize methods have large (but cold) stack frames. This is expected
 // for faithful config types and not a hot path.
 #![allow(clippy::large_stack_frames, reason = "faithful nested config model")]
+// The translator's mapping functions are long but linear (one arm per
+// AuthPolicy construct); splitting purely to satisfy a 30-line cap would
+// scatter cohesive logic. The CEL remapper slices strings at byte offsets
+// returned by `find()` on ASCII needles, which are always char boundaries.
+#![allow(
+    clippy::too_many_lines,
+    clippy::string_slice,
+    reason = "linear translation functions; CEL scanner slices at ASCII boundaries"
+)]
 
+pub(crate) mod cel;
+pub(crate) mod emit;
 pub(crate) mod model;
+pub(crate) mod report;
+pub(crate) mod translate;
