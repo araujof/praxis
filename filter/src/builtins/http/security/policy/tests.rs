@@ -370,6 +370,7 @@ fn build_filter(config_path: String) -> PolicyFilter {
         require_mcp_metadata: true,
         init_timeout_secs: 30,
         max_buffer_bytes: 10_485_760,
+        enforcement: super::config::EnforcementMode::Mcp,
     };
     PolicyFilter::new(cfg).expect("filter should construct")
 }
@@ -698,6 +699,7 @@ async fn missing_mcp_metadata_passes_when_not_required() {
         require_mcp_metadata: false,
         init_timeout_secs: 30,
         max_buffer_bytes: 10_485_760,
+        enforcement: super::config::EnforcementMode::Mcp,
     };
     let filter = PolicyFilter::new(cfg).expect("filter should construct");
 
@@ -1372,6 +1374,7 @@ async fn response_phase_without_request_identity_fails_closed() {
         require_mcp_metadata: true,
         init_timeout_secs: 30,
         max_buffer_bytes: 10_485_760,
+        enforcement: super::config::EnforcementMode::Mcp,
     };
     let filter = PolicyFilter::new(cfg).expect("filter should construct");
 

@@ -21,6 +21,11 @@ cpex-policy-engine = [
     "dep:cpex",
     "dep:tokio",
 ]
+# Experimental generic-HTTP authorization for the policy filter
+# (`enforcement: http`). Off by default; opting in enables the non-MCP
+# authz path that consumes the CPEX http.* attributes / cmf.http_request
+# hook / denyWith details. See the AuthPolicy support docs.
+experimental-http-authz = ["cpex-policy-engine"]
 
 [package.metadata.cargo-machete]
 ignored = ["praxis-proto", "prost-wkt-types", "tonic"]
