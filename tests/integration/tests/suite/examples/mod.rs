@@ -13,6 +13,8 @@ mod agentic_routing;
 #[cfg(feature = "ai-inference")]
 mod anthropic_messages;
 mod api_key_filter;
+#[cfg(feature = "experimental-http-authz")]
+mod authpolicy_http;
 mod basic_reverse_proxy;
 mod canary_routing;
 mod circuit_breaker;
