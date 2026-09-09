@@ -67,6 +67,20 @@ pub fn build_subrequest_client(config: &Config) -> SubRequestClient {
     SubRequestClient::with_max_response_bytes(connector, ceiling)
 }
 
+/// Register the connector the policy engine's outbound calls borrow.
+///
+/// Call before resolving pipelines. The engine fetches JWKS while its filter
+/// is being constructed, so it needs the connector before any pipeline exists
+/// to hand it a client.
+#[cfg(feature = "policy-engine")]
+fn register_policy_connector(client: &SubRequestClient) {
+    praxis_filter::set_policy_subrequest_connector(client.connector());
+}
+
+/// No policy engine is compiled in, so there is nothing to register.
+#[cfg(not(feature = "policy-engine"))]
+fn register_policy_connector(_client: &SubRequestClient) {}
+
 // -----------------------------------------------------------------------------
 // Pipeline Resolution
 // -----------------------------------------------------------------------------
@@ -76,6 +90,9 @@ pub fn build_subrequest_client(config: &Config) -> SubRequestClient {
 /// This is the config-to-runtime bridge. After it returns, the concept
 /// of "chains" no longer exists — each listener has a flat pipeline of
 /// filters in execution order.
+///
+/// Registers `subrequest_client`'s connector for the policy engine first,
+/// since a policy filter fetches JWKS as it is constructed here.
 ///
 /// # Errors
 ///
@@ -97,6 +114,8 @@ pub fn resolve_pipelines(
     session_stores: &Arc<praxis_filter::SessionStoreRegistry>,
     subrequest_client: &SubRequestClient,
 ) -> Result<ListenerPipelines, Box<dyn std::error::Error + Send + Sync>> {
+    register_policy_connector(subrequest_client);
+
     let chains: HashMap<&str, &[_]> = config
         .filter_chains
         .iter()
