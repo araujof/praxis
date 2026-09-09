@@ -50,11 +50,9 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 # The umbrella is bundled extensions only. Anything else a policy document names
 # comes from the host via `register_policy_plugin_factory`; see the policy
 # filter's `host_plugins` module.
-# `http-hyper` provides the transport required by network-capable PPE plugins.
-ppe = { version = "0.2.0", package = "praxis-policy", features = [
-    "builtins",
-    "http-hyper",
-] }
+# No `http-hyper`: the policy filter installs a transport over Praxis's own
+# sub-request client, so a `policy-engine` build keeps one HTTP stack.
+ppe = { version = "0.2.0", package = "praxis-policy", features = ["builtins"] }
 clap = { version = "4.6.6", features = ["derive"] }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 dashmap = "6.2.1"
