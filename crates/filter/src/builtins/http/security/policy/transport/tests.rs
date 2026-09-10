@@ -445,9 +445,6 @@ async fn resolution_leaves_the_rest_of_the_budget_for_the_exchange() {
 
 #[test]
 fn a_public_answer_survives_a_private_one() {
-    // The regression this exists for: a split-horizon IdP answering with
-    // both must stay reachable at the address that is allowed, rather than
-    // being refused because the private answer sorted first.
     let private: SocketAddr = "10.0.0.1:443".parse().unwrap();
     // Not a documentation range: the shared table denies those too.
     let public: SocketAddr = "8.8.8.8:443".parse().unwrap();
@@ -482,8 +479,6 @@ fn allowing_private_destinations_keeps_every_answer() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unreachable_address_fails_over_to_a_healthy_one() {
-    // What the single-address resolve regressed: a dual-answer IdP whose
-    // first address is down was unreachable for a whole DNS TTL.
     let backend = Backend::spawn(Reply::Keepalive(OK_RESPONSE));
     let target = Target::parse(&backend.url("/jwks")).unwrap();
     let request = HttpRequest::get(backend.url("/jwks")).timeout(Duration::from_secs(5));
@@ -504,9 +499,6 @@ async fn an_unreachable_address_fails_over_to_a_healthy_one() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_delivered_request_is_never_retried_on_another_address() {
-    // The guard that keeps failover from becoming a resend: the first
-    // backend reads the request and closes, so the outcome is unknown and
-    // a second attempt could mint a second token.
     let read_then_closed = Backend::spawn(Reply::Silence);
     let untouched = Backend::spawn(Reply::Keepalive(OK_RESPONSE));
     let target = Target::parse(&read_then_closed.url("/token")).unwrap();
@@ -553,8 +545,6 @@ async fn an_exhausted_budget_stops_the_walk_as_unsent() {
 
 #[test]
 fn only_an_address_specific_failure_justifies_another_address() {
-    // Admission exhaustion is process-wide, so the next address would wait
-    // on the same semaphore rather than succeed.
     assert!(worth_another_address(&SubRequestError::Connect("refused".to_owned())));
     assert!(worth_another_address(&SubRequestError::CircuitOpen {
         peer: "10.0.0.1:443".to_owned()
@@ -733,12 +723,9 @@ async fn a_failed_exchange_is_never_resent() {
 }
 
 #[test]
-fn a_new_transport_holds_no_client_and_has_opened_no_socket() {
+fn a_new_transport_builds_its_client_lazily() {
     let transport = PolicyHttpTransport::new(false);
-    assert!(
-        transport.client.get().is_none(),
-        "the pool must not bind to the runtime that built the transport"
-    );
+    assert!(transport.client.get().is_none(), "the client is built on first use");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -762,14 +749,9 @@ async fn a_transport_that_was_never_handed_a_client_builds_its_own_and_dispatche
 
 #[test]
 fn a_transport_keeps_the_connector_it_was_built_with() {
-    // The drift this guards: a policy that fetches nothing while its filter
-    // is constructed makes its first call at request time. Registration is
-    // last-wins, so reading the holder then would pick up whatever runtime
-    // registered most recently rather than this transport's own pool.
     let own = SubRequestConnector::new(8, None);
     let transport = PolicyHttpTransport::with_connector(Some(own.clone()), true);
 
-    // Stand in for a second runtime registering after construction.
     super::super::set_policy_subrequest_connector(&SubRequestConnector::new(1, None));
 
     assert!(
@@ -782,8 +764,6 @@ fn a_transport_keeps_the_connector_it_was_built_with() {
 fn a_transport_built_without_a_registration_falls_back() {
     let transport = PolicyHttpTransport::with_connector(None, true);
     assert!(transport.client.get().is_none(), "nothing built before first use");
-    // Exercising `client()` takes the fallback branch rather than reading
-    // whatever the process holder happens to contain.
     let _client = transport.client();
     assert!(transport.client.get().is_some());
 }

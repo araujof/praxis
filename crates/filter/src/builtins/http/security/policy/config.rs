@@ -67,14 +67,11 @@ pub(crate) struct PolicyFilterConfig {
     #[serde(default = "default_max_buffer_bytes")]
     pub max_buffer_bytes: usize,
 
-    /// Allow policy-engine calls to private or loopback identity providers.
+    /// Permit private or loopback policy endpoints.
     ///
-    /// Disabled by default to limit SSRF through policy-defined endpoints.
-    /// Every address a hostname answers with is checked before it is
-    /// dialled, so a private answer is skipped rather than trusted; a name
-    /// answering only with private addresses is refused. This does not
-    /// affect Praxis upstreams, which use
-    /// `insecure_options.allow_private_endpoints`.
+    /// By default, private DNS answers are skipped and calls with no public
+    /// answer are rejected. Proxy upstreams use
+    /// `insecure_options.allow_private_endpoints` instead.
     #[serde(default)]
     pub allow_private_idp: bool,
 

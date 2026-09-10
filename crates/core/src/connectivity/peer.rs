@@ -69,11 +69,7 @@ pub enum AddressResolutionError {
     },
 }
 
-/// Cached DNS resolution result: every address the name resolved to, or
-/// the failure message when the last resolution failed (negative caching).
-///
-/// All answers rather than the preferred one, so a caller that can fail
-/// over is not restricted to whichever address happened to sort first.
+/// Cached DNS addresses, or the last resolution failure.
 struct DnsCacheEntry {
     /// Outcome of the last resolution.
     outcome: Result<Arc<[SocketAddr]>, String>,
@@ -93,11 +89,7 @@ impl DnsCacheEntry {
     }
 }
 
-/// Process-wide bounded DNS cache.
-///
-/// Sharded ([`DashMap`]) so the per-request read path never contends
-/// on a single process-wide lock; the preferred address is stored
-/// pre-selected so a hit is one lock-free lookup with no scan.
+/// Process-wide bounded cache of complete DNS results.
 fn dns_cache() -> &'static DashMap<String, DnsCacheEntry> {
     static CACHE: OnceLock<DashMap<String, DnsCacheEntry>> = OnceLock::new();
     CACHE.get_or_init(DashMap::new)
@@ -111,12 +103,9 @@ fn dns_inflight() -> &'static DashMap<String, Arc<tokio::sync::Mutex<()>>> {
     INFLIGHT.get_or_init(DashMap::new)
 }
 
-/// Resolve an upstream address to the one address to dial.
+/// Resolve one upstream address, preferring IPv4.
 ///
-/// IPv4 when the name answers with one, otherwise its first answer.
-/// Callers that can try more than one address want [`resolve_addresses`]
-/// instead, so a name with a healthy second answer is not pinned to an
-/// unreachable first one.
+/// Use [`resolve_addresses`] when the caller can fail over.
 ///
 /// # Errors
 ///
@@ -127,15 +116,10 @@ pub async fn resolve_address(address: &str) -> Result<SocketAddr, AddressResolut
     select_preferred_address(&addresses, address)
 }
 
-/// Resolve an upstream address to every address it answers with.
+/// Resolve every address returned for an upstream.
 ///
-/// Literal socket addresses take the allocation-free fast path. Hostnames use
-/// a bounded process-wide cache and run the operating-system resolver through
-/// [`tokio::task::spawn_blocking`].
-///
-/// Order is the resolver's own. A caller that dials these in sequence is
-/// responsible for judging each address it is about to reach — the list is
-/// resolved once, so there is no second lookup between a check and a dial.
+/// Results retain resolver order and are cached. Callers must validate each
+/// address before dialing it.
 ///
 /// # Errors
 ///

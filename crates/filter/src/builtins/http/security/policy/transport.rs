@@ -44,14 +44,7 @@ const POLICY_PEER_GROUP: u64 = 0x706F_6C69_6379_5F31; // "policy_1"
 /// Performs the policy engine's outbound HTTP over the proxy's connector.
 #[derive(Debug)]
 pub(super) struct PolicyHttpTransport {
-    /// The connector registered when this transport was built.
-    ///
-    /// Captured here rather than read on first use. Registration is
-    /// last-wins, and a policy that fetches nothing while its filter is
-    /// being constructed makes its first call at request time — by which
-    /// point a second runtime may have registered its own connector. Reading
-    /// late would hand this transport that runtime's pool, admission limit,
-    /// and breaker.
+    /// Connector snapshot taken when this transport was constructed.
     registered: Option<SubRequestConnector>,
 
     /// Built on first call from [`Self::registered`].
@@ -76,12 +69,7 @@ impl PolicyHttpTransport {
         }
     }
 
-    /// The client, built from the captured connector on first call.
-    ///
-    /// Still lazy: the pool must not open connections on whichever runtime
-    /// happened to construct the transport, since an initialization runtime
-    /// is dropped before the first request arrives. Capturing the connector
-    /// costs nothing — it is a handle, and no socket exists until a call.
+    /// The client, built lazily from the captured connector.
     fn client(&self) -> &SubRequestClient {
         self.client.get_or_init(|| build_client(self.registered.clone()))
     }
@@ -121,7 +109,7 @@ impl PolicyHttpTransport {
     /// # Errors
     ///
     /// Returns the last address's failure, or [`HttpTransportError::Connect`]
-    /// when the budget ran out before an address could be tried.
+    /// when the budget expires before all addresses can be tried.
     #[expect(
         clippy::large_stack_frames,
         clippy::large_futures,
@@ -172,8 +160,6 @@ impl PolicyHttpTransport {
             }
         }
 
-        // `usable_addresses` never returns an empty list, so the loop always
-        // ran at least once and recorded a failure.
         Err(last.unwrap_or_else(|| unsent(format!("'{}': no address was tried", target.dial_authority))))
     }
 }
@@ -182,10 +168,7 @@ impl PolicyHttpTransport {
 ///
 /// # Errors
 ///
-/// Returns [`HttpTransportError::Rejected`] naming a denied address's rule
-/// when nothing survives. Filtering per address rather than refusing the
-/// whole name means a host answering with both a public and a private
-/// address is still reachable at the public one.
+/// Returns [`HttpTransportError::Rejected`] when no permitted address remains.
 fn usable_addresses(
     addresses: &[SocketAddr],
     allow_private: bool,
@@ -224,11 +207,8 @@ fn usable_addresses(
 
 /// Whether a failure justifies trying the destination's next address.
 ///
-/// Only failures specific to the address just tried. Admission exhaustion
-/// is process-wide, so the next address waits on the same semaphore, and
-/// anything that may have reached a peer must never be repeated — that is
-/// what keeps this loop from becoming a resend of a request the peer may
-/// already have acted on.
+/// Admission exhaustion applies to every address, and a request that may have
+/// reached a peer must not be resent.
 fn worth_another_address(error: &SubRequestError) -> bool {
     matches!(error, SubRequestError::Connect(_) | SubRequestError::CircuitOpen { .. })
 }
@@ -250,9 +230,7 @@ impl HttpTransport for PolicyHttpTransport {
 
 /// Build the client a transport dispatches through.
 ///
-/// Falls back to a private pool when the host registered nothing, so an
-/// embedder who forgot the registration still gets working policy calls —
-/// with a warning naming the call that would remove the second pool.
+/// Falls back to a private pool when the host registered nothing.
 fn build_client(shared: Option<SubRequestConnector>) -> SubRequestClient {
     let connector = shared.unwrap_or_else(|| {
         tracing::warn!(

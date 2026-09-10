@@ -69,9 +69,8 @@ pub fn build_subrequest_client(config: &Config) -> SubRequestClient {
 
 /// Register the connector the policy engine's outbound calls borrow.
 ///
-/// Call before resolving pipelines. The engine fetches JWKS while its filter
-/// is being constructed, so it needs the connector before any pipeline exists
-/// to hand it a client.
+/// Call before resolving pipelines because filter initialization may issue
+/// policy HTTP requests.
 #[cfg(feature = "policy-engine")]
 fn register_policy_connector(client: &SubRequestClient) {
     praxis_filter::set_policy_subrequest_connector(client.connector());
@@ -92,7 +91,7 @@ fn register_policy_connector(_client: &SubRequestClient) {}
 /// filters in execution order.
 ///
 /// Registers `subrequest_client`'s connector for the policy engine first,
-/// since a policy filter fetches JWKS as it is constructed here.
+/// since policy filters may issue HTTP requests during construction.
 ///
 /// # Errors
 ///
