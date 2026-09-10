@@ -11,7 +11,7 @@ use std::{
     io::{Read as _, Write as _},
     net::{TcpListener, TcpStream},
     sync::{
-        Arc, Mutex,
+        Mutex,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -428,12 +428,147 @@ async fn resolution_leaves_the_rest_of_the_budget_for_the_exchange() {
     let target = Target::parse(&backend.url("/jwks")).unwrap();
     let budget = Duration::from_secs(5);
 
-    let (address, remaining) = transport(true).resolve_within(&target, budget).await.unwrap();
+    let (addresses, remaining) = transport(true).resolve_within(&target, budget).await.unwrap();
 
-    assert_eq!(address, backend.address, "the literal address is what gets dialled");
+    assert_eq!(
+        &*addresses,
+        &[backend.address],
+        "the literal address is what gets dialled"
+    );
     assert!(remaining > Duration::ZERO, "a resolved literal leaves budget to spend");
     assert!(remaining <= budget, "and never more than was granted");
 }
+
+// ---------------------------------------------------------------------------
+// Address selection and failover
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_public_answer_survives_a_private_one() {
+    // The regression this exists for: a split-horizon IdP answering with
+    // both must stay reachable at the address that is allowed, rather than
+    // being refused because the private answer sorted first.
+    let private: SocketAddr = "10.0.0.1:443".parse().unwrap();
+    // Not a documentation range: the shared table denies those too.
+    let public: SocketAddr = "8.8.8.8:443".parse().unwrap();
+
+    let usable = usable_addresses(&[private, public], false, "idp.example.com").unwrap();
+    assert_eq!(usable, vec![public], "only the private answer is dropped");
+}
+
+#[test]
+fn a_name_with_no_public_answer_is_refused_and_names_the_rule() {
+    let err = usable_addresses(
+        &["169.254.169.254:80".parse().unwrap(), "10.0.0.1:80".parse().unwrap()],
+        false,
+        "idp.example.com",
+    )
+    .unwrap_err();
+
+    match err {
+        HttpTransportError::Rejected(reason) => {
+            assert!(!reason.is_empty(), "the refusal must name a rule; got {reason}");
+        },
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+}
+
+#[test]
+fn allowing_private_destinations_keeps_every_answer() {
+    let addresses: Vec<SocketAddr> = vec!["10.0.0.1:443".parse().unwrap(), "127.0.0.1:443".parse().unwrap()];
+    let usable = usable_addresses(&addresses, true, "idp.internal").unwrap();
+    assert_eq!(usable, addresses);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreachable_address_fails_over_to_a_healthy_one() {
+    // What the single-address resolve regressed: a dual-answer IdP whose
+    // first address is down was unreachable for a whole DNS TTL.
+    let backend = Backend::spawn(Reply::Keepalive(OK_RESPONSE));
+    let target = Target::parse(&backend.url("/jwks")).unwrap();
+    let request = HttpRequest::get(backend.url("/jwks")).timeout(Duration::from_secs(5));
+
+    let response = transport(true)
+        .dispatch(
+            &target,
+            &request,
+            &[closed_port(), backend.address],
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status, 200);
+    assert_eq!(backend.heads().len(), 1, "the healthy address served it once");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delivered_request_is_never_retried_on_another_address() {
+    // The guard that keeps failover from becoming a resend: the first
+    // backend reads the request and closes, so the outcome is unknown and
+    // a second attempt could mint a second token.
+    let read_then_closed = Backend::spawn(Reply::Silence);
+    let untouched = Backend::spawn(Reply::Keepalive(OK_RESPONSE));
+    let target = Target::parse(&read_then_closed.url("/token")).unwrap();
+    let request = HttpRequest::post(read_then_closed.url("/token"), Bytes::from_static(b"grant_type=x"))
+        .timeout(Duration::from_secs(5));
+
+    let err = transport(true)
+        .dispatch(
+            &target,
+            &request,
+            &[read_then_closed.address, untouched.address],
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.may_have_reached_peer(),
+        "a peer that read the request leaves an unknown outcome; got {err:?}"
+    );
+    assert_eq!(read_then_closed.heads().len(), 1, "sent once");
+    assert_eq!(
+        untouched.connections(),
+        0,
+        "the next address must not be tried after a possible delivery"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_exhausted_budget_stops_the_walk_as_unsent() {
+    let first = closed_port();
+    let second = closed_port();
+    let target = Target::parse("http://idp.example.com/jwks").unwrap();
+    let request = HttpRequest::get("http://idp.example.com/jwks").timeout(Duration::from_millis(50));
+
+    let err = transport(true)
+        .dispatch(&target, &request, &[first, second], Duration::ZERO)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, HttpTransportError::Connect(_)), "got {err:?}");
+    assert!(!err.may_have_reached_peer(), "nothing was sent");
+}
+
+#[test]
+fn only_an_address_specific_failure_justifies_another_address() {
+    // Admission exhaustion is process-wide, so the next address would wait
+    // on the same semaphore rather than succeed.
+    assert!(worth_another_address(&SubRequestError::Connect("refused".to_owned())));
+    assert!(worth_another_address(&SubRequestError::CircuitOpen {
+        peer: "10.0.0.1:443".to_owned()
+    }));
+    assert!(!worth_another_address(&SubRequestError::AdmissionTimeout {
+        max_connections: 1
+    }));
+    assert!(!worth_another_address(&SubRequestError::DeadlineExceeded));
+    assert!(!worth_another_address(&SubRequestError::Io("reset".to_owned())));
+}
+
+// ---------------------------------------------------------------------------
+// Limits and deadlines
+// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_successful_exchange_returns_the_status_body_and_headers() {
@@ -628,7 +763,7 @@ async fn a_transport_that_was_never_handed_a_client_builds_its_own_and_dispatche
 #[test]
 fn the_registered_connector_is_the_one_policy_calls_use() {
     let shared = SubRequestConnector::new(16, None);
-    let client = build_client(Some(&shared));
+    let client = build_client(Some(shared.clone()));
     assert!(
         std::ptr::eq(client.connector().connector(), shared.connector()),
         "policy calls must share the proxy's pool, not open a second one"
@@ -638,8 +773,8 @@ fn the_registered_connector_is_the_one_policy_calls_use() {
 #[test]
 fn two_transports_from_one_registration_share_a_pool() {
     let shared = SubRequestConnector::new(16, None);
-    let first = build_client(Some(&shared));
-    let second = build_client(Some(&shared));
+    let first = build_client(Some(shared.clone()));
+    let second = build_client(Some(shared.clone()));
     assert!(std::ptr::eq(
         first.connector().connector(),
         second.connector().connector()

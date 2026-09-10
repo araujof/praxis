@@ -30,8 +30,11 @@ ambiguous configuration:
 - Policy engine outbound calls (JWKS, token exchange,
   CIBA backchannel) go through the proxy's sub-request
   connector and refuse loopback, RFC 1918, link-local
-  (including cloud metadata), and CGNAT addresses. The
-  check runs on the resolved address at dial time, so
+  (including cloud metadata), and CGNAT addresses.
+  Every address a name answers with is checked before
+  it is dialled, so a private answer is skipped rather
+  than trusted and a name answering only with private
+  addresses is refused. The list is resolved once, so
   there is no second lookup to rebind. Override with
   the `policy` filter's `allow_private_idp` for an
   in-cluster identity provider.

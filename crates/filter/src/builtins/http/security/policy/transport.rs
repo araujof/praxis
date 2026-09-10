@@ -3,12 +3,20 @@
 
 //! Policy-engine HTTP over Praxis's shared sub-request connector.
 //!
-//! Destinations are resolved, checked against the policy egress rules,
-//! and dialled by literal address within the caller's deadline. Calls use
-//! HTTP/1.1, the platform trust store, and a policy-specific connection
-//! pool partition.
+//! Every address a destination answers with is checked against the policy
+//! egress rules, and the allowed ones are dialled by literal address, in
+//! turn, within the caller's deadline. Calls use HTTP/1.1, the platform
+//! trust store, and a policy-specific connection pool partition.
+//!
+//! Walking the addresses is not a resend: only a failure specific to the
+//! address just tried moves on, so a request a peer may have acted on ends
+//! the call. See [`worth_another_address`].
 
-use std::{net::SocketAddr, sync::OnceLock, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use pingora_core::upstreams::peer::HttpPeer;
@@ -67,11 +75,11 @@ impl PolicyHttpTransport {
         &self,
         target: &Target,
         budget: Duration,
-    ) -> Result<(SocketAddr, Duration), HttpTransportError> {
+    ) -> Result<(Arc<[SocketAddr]>, Duration), HttpTransportError> {
         let authority = &target.dial_authority;
         let started = tokio::time::Instant::now();
 
-        let address = tokio::time::timeout(budget, peer_utils::resolve_address(authority))
+        let addresses = tokio::time::timeout(budget, peer_utils::resolve_addresses(authority))
             .await
             .map_err(|_elapsed| unsent(format!("resolve '{authority}': deadline exceeded")))?
             .map_err(|e| unsent(format!("resolve '{authority}': {e}")))?;
@@ -84,25 +92,124 @@ impl PolicyHttpTransport {
                 "resolve '{authority}': deadline exceeded before the request could be sent"
             )));
         }
-        Ok((address, remaining))
+        Ok((addresses, remaining))
     }
 
-    /// Refuse a destination the shared address table rules out.
-    fn check_egress(&self, address: SocketAddr, host: &str) -> Result<(), HttpTransportError> {
-        match private_address_reason(&address.ip()).filter(|_| !self.allow_private) {
-            None => Ok(()),
-            Some(reason) => {
-                tracing::warn!(
-                    target: "policy.transport",
-                    host,
-                    address = %address,
-                    reason,
-                    "policy: refusing an outbound call to a non-public address"
-                );
-                Err(HttpTransportError::Rejected(reason.to_owned()))
-            },
+    /// Dial each usable address in turn, returning the first answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the last address's failure, or [`HttpTransportError::Connect`]
+    /// when the budget ran out before an address could be tried.
+    #[expect(
+        clippy::large_stack_frames,
+        clippy::large_futures,
+        reason = "Pingora session types are large"
+    )]
+    #[expect(clippy::too_many_lines, reason = "one address attempt, inline")]
+    async fn dispatch(
+        &self,
+        target: &Target,
+        req: &HttpRequest,
+        addresses: &[SocketAddr],
+        mut remaining: Duration,
+    ) -> Result<HttpResponse, HttpTransportError> {
+        let sub_request = target.sub_request(req)?;
+        let mut last = None;
+
+        for &address in addresses {
+            if remaining.is_zero() {
+                return Err(unsent(format!(
+                    "'{}': deadline exceeded before every address was tried",
+                    target.dial_authority
+                )));
+            }
+            let attempt = tokio::time::Instant::now();
+            let peer = target.peer(address, req.connect_timeout);
+
+            tracing::debug!(
+                target: "policy.transport",
+                method = %req.method,
+                url = %req.url,
+                address = %address,
+                "policy: dispatching an outbound call over the proxy connector"
+            );
+
+            match self
+                .client()
+                .execute(&peer, &sub_request, req.max_response_bytes, remaining, None)
+                .await
+            {
+                Ok(response) => return Ok(into_http_response(response)),
+                Err(error) => {
+                    if !worth_another_address(&error) {
+                        return Err(map_error(&error));
+                    }
+                    last = Some(map_error(&error));
+                    remaining = remaining.saturating_sub(attempt.elapsed());
+                },
+            }
         }
+
+        // `usable_addresses` never returns an empty list, so the loop always
+        // ran at least once and recorded a failure.
+        Err(last.unwrap_or_else(|| unsent(format!("'{}': no address was tried", target.dial_authority))))
     }
+}
+
+/// Keep the addresses the shared table permits dialling.
+///
+/// # Errors
+///
+/// Returns [`HttpTransportError::Rejected`] naming a denied address's rule
+/// when nothing survives. Filtering per address rather than refusing the
+/// whole name means a host answering with both a public and a private
+/// address is still reachable at the public one.
+fn usable_addresses(
+    addresses: &[SocketAddr],
+    allow_private: bool,
+    host: &str,
+) -> Result<Vec<SocketAddr>, HttpTransportError> {
+    if allow_private {
+        return Ok(addresses.to_vec());
+    }
+
+    let mut denied = None;
+    let usable: Vec<SocketAddr> = addresses
+        .iter()
+        .copied()
+        .filter(|address| match private_address_reason(&address.ip()) {
+            None => true,
+            Some(reason) => {
+                denied = Some(reason);
+                false
+            },
+        })
+        .collect();
+
+    if usable.is_empty() {
+        // Resolution never yields an empty list, so a rule denied every answer.
+        let reason = denied.unwrap_or("no resolvable addresses");
+        tracing::warn!(
+            target: "policy.transport",
+            host,
+            reason,
+            "policy: refusing an outbound call with no public address"
+        );
+        return Err(HttpTransportError::Rejected(reason.to_owned()));
+    }
+    Ok(usable)
+}
+
+/// Whether a failure justifies trying the destination's next address.
+///
+/// Only failures specific to the address just tried. Admission exhaustion
+/// is process-wide, so the next address waits on the same semaphore, and
+/// anything that may have reached a peer must never be repeated — that is
+/// what keeps this loop from becoming a resend of a request the peer may
+/// already have acted on.
+fn worth_another_address(error: &SubRequestError) -> bool {
+    matches!(error, SubRequestError::Connect(_) | SubRequestError::CircuitOpen { .. })
 }
 
 #[async_trait]
@@ -114,25 +221,9 @@ impl HttpTransport for PolicyHttpTransport {
     )]
     async fn execute(&self, req: HttpRequest) -> Result<HttpResponse, HttpTransportError> {
         let target = Target::parse(&req.url)?;
-        let (address, remaining) = self.resolve_within(&target, req.timeout).await?;
-        self.check_egress(address, &target.host_header)?;
-
-        let peer = target.peer(address, req.connect_timeout);
-        let sub_request = target.sub_request(&req)?;
-
-        tracing::debug!(
-            target: "policy.transport",
-            method = %req.method,
-            url = %req.url,
-            address = %address,
-            "policy: dispatching an outbound call over the proxy connector"
-        );
-
-        self.client()
-            .execute(&peer, &sub_request, req.max_response_bytes, remaining, None)
-            .await
-            .map(into_http_response)
-            .map_err(|e| map_error(&e))
+        let (addresses, remaining) = self.resolve_within(&target, req.timeout).await?;
+        let usable = usable_addresses(&addresses, self.allow_private, &target.host_header)?;
+        self.dispatch(&target, &req, &usable, remaining).await
     }
 }
 
@@ -141,8 +232,8 @@ impl HttpTransport for PolicyHttpTransport {
 /// Falls back to a private pool when the host registered nothing, so an
 /// embedder who forgot the registration still gets working policy calls —
 /// with a warning naming the call that would remove the second pool.
-fn build_client(shared: Option<&SubRequestConnector>) -> SubRequestClient {
-    let connector = shared.cloned().unwrap_or_else(|| {
+fn build_client(shared: Option<SubRequestConnector>) -> SubRequestClient {
+    let connector = shared.unwrap_or_else(|| {
         tracing::warn!(
             target: "policy.transport",
             "policy: no shared sub-request connector registered, so policy calls use a second \
@@ -370,6 +461,9 @@ fn unsent(message: String) -> HttpTransportError {
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
+    // A test that drives `dispatch` directly inlines its future, where
+    // `execute` gets one boxed by `async_trait`.
+    clippy::large_futures,
     reason = "tests"
 )]
 mod tests;
