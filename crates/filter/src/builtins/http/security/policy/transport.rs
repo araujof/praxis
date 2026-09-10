@@ -1,81 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Praxis Contributors
 
-//! The policy engine's outbound HTTP, carried over Praxis's own
-//! sub-request client.
+//! Policy-engine HTTP over Praxis's shared sub-request connector.
 //!
-//! The engine performs no HTTP itself: a JWKS fetch, an RFC 8693 token
-//! exchange, and a CIBA backchannel call all go through a transport the
-//! host installs. Installing this one means a `policy-engine` build has a
-//! single HTTP stack — one connector per process and an egress path the
-//! operator can see — instead of a second client with its own pool.
-//!
-//! # What policy calls now inherit
-//!
-//! `runtime.subrequest_pool_size`, `runtime.subrequest_max_connections`,
-//! and `runtime.subrequest_circuit_breaker` apply to them, and they appear
-//! in the sub-request latency histogram. The breaker is keyed per peer
-//! address and SNI, so a failing upstream only opens the circuit for a
-//! policy call that dials the very same address — and an open circuit is
-//! refused before anything is sent, which is fail-closed and safe to
-//! retry. `body_limits.max_response_bytes` deliberately does *not* apply:
-//! the transport keeps its own 1 MiB ceiling so a tight proxy-wide
-//! response limit cannot turn a JWKS fetch into an identity failure.
-//! Per-request limits still win, since the client clamps to the smaller
-//! of the two.
-//!
-//! The admission limit is shared in both directions, and the damaging one
-//! is the data plane starving identity: a saturated limit refuses a JWKS
-//! refresh or a token exchange. Such a refusal is reported as `Connect`
-//! rather than `Rejected` so the engine's own retry policy still applies
-//! to it — see [`map_error`].
-//!
-//! Calls are HTTP/1.1 only, because Pingora peers built here advertise no
-//! h2.
-//!
-//! # TLS
-//!
-//! Verification is against the platform trust store, which honours
-//! `SSL_CERT_FILE` and `SSL_CERT_DIR`, and not the compiled-in bundle the
-//! engine's own client used. Certificate and hostname verification stay
-//! on. Cluster TLS config does not reach these peers — a policy URL
-//! belongs to no cluster — so a policy call presents no client
-//! certificate and cannot pin a private CA.
-//!
-//! Peers carry a dedicated group key so their connections are never
-//! interchanged with data-plane ones. A peer's reuse hash does not cover
-//! `options.ca`, so without it a connection verified against a cluster's
-//! private CA could serve a policy call that never trusted that CA.
-//!
-//! # Egress
-//!
-//! The destination is resolved once, checked, and dialled as the literal
-//! address that was checked, so there is no second lookup for DNS
-//! rebinding to exploit. The rule table is the engine's own
-//! [`private_address_reason`], shared with the transport it replaces so
-//! the two cannot drift, and `allow_private_idp` remains the escape hatch
-//! for a loopback or in-cluster identity provider. Only the one address
-//! that gets dialled is judged. Resolution picks a single preferred
-//! address, so a host answering with both a public and a private one is
-//! refused whenever the private answer is the preferred one, rather than
-//! falling back to the public answer. The address may come from the
-//! process DNS cache; that is not a bypass, since the address checked is
-//! the address dialled either way.
-//!
-//! Resolving the name is charged against the caller's deadline. The
-//! client's own clock starts once a peer exists, so a lookup left
-//! unbounded would be covered by nothing.
-//!
-//! # Retries
-//!
-//! Nothing here resends. Two of the engine's three callers issue
-//! non-idempotent `POST`s, and only they know what is safe to repeat.
-//! Pingora validates a pooled connection when it takes one and discards a
-//! dead one, so a stale keepalive entry is not handed to a request. The
-//! residual window is a peer closing between that check and our write,
-//! which reports as an unknown outcome for the caller to reconcile.
-//!
-//! [`private_address_reason`]: ppe::praxis_policy_core::http_addr::private_address_reason
+//! Destinations are resolved, checked against the policy egress rules,
+//! and dialled by literal address within the caller's deadline. Calls use
+//! HTTP/1.1, the platform trust store, and a policy-specific connection
+//! pool partition.
 
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 
@@ -96,22 +27,13 @@ use praxis_core::{
 
 use super::shared_connector::shared_policy_connector;
 
-/// Isolates policy connections within the shared keepalive pool.
+/// Isolates policy connections from cluster-specific TLS state.
 ///
-/// A peer's reuse hash covers `verify_cert`, `verify_hostname` and the
-/// client certificate, but not `options.ca`. Without a distinct group key a
-/// data-plane connection verified against a cluster's private CA would be
-/// handed to a policy call that never trusted that CA, and the reverse.
-/// Pingora hashes this field, so it partitions the pool without needing a
-/// second connector, admission semaphore, or breaker registry.
+/// Pingora's reuse hash omits `options.ca`, so a distinct group key keeps
+/// cluster private-CA connections out of the policy pool partition.
 const POLICY_PEER_GROUP: u64 = 0x706F_6C69_6379_5F31; // "policy_1"
 
 /// Performs the policy engine's outbound HTTP over the proxy's connector.
-///
-/// Install one per engine with `PolicyEngine::set_http_transport`. The
-/// client is built on first use, never at construction, so a transport
-/// created on a short-lived initialization runtime does not bind its pool
-/// to a runtime that is about to be dropped.
 #[derive(Debug)]
 pub(super) struct PolicyHttpTransport {
     /// Built on first call from the registered connector.
@@ -135,20 +57,12 @@ impl PolicyHttpTransport {
         self.client.get_or_init(|| build_client(shared_policy_connector()))
     }
 
-    /// Resolve the destination inside `budget`, returning what is left of it.
-    ///
-    /// Name resolution is charged against the caller's deadline. Left
-    /// unbounded it is not covered by anything: the client's clock starts
-    /// after this returns, and a stalled resolver would outlast the deadline
-    /// the caller declared.
+    /// Resolve the destination within `budget` and return the remaining time.
     ///
     /// # Errors
     ///
-    /// Returns [`HttpTransportError::Connect`] when the name does not
-    /// resolve, when resolving it outlasts `budget`, and when resolution
-    /// leaves nothing to spend on the exchange. `Connect` in every case
-    /// because nothing was sent, so a token exchange stays free to retry
-    /// instead of reconciling a mint that never happened.
+    /// Returns [`HttpTransportError::Connect`] when resolution fails or
+    /// exhausts the budget because no request was sent.
     async fn resolve_within(
         &self,
         target: &Target,
@@ -162,9 +76,8 @@ impl PolicyHttpTransport {
             .map_err(|_elapsed| unsent(format!("resolve '{authority}': deadline exceeded")))?
             .map_err(|e| unsent(format!("resolve '{authority}': {e}")))?;
 
-        // The client turns a zero budget into `DeadlineExceeded`, which reads
-        // as a possibly-delivered request. Nothing has been sent yet, so say
-        // so here instead.
+        // Preserve the unsent classification instead of passing a zero budget
+        // to the client, which reports a possibly-delivered timeout.
         let remaining = budget.saturating_sub(started.elapsed());
         if remaining.is_zero() {
             return Err(unsent(format!(
@@ -253,12 +166,8 @@ fn into_http_response(response: SubResponse) -> HttpResponse {
 fn map_error(error: &SubRequestError) -> HttpTransportError {
     match error {
         SubRequestError::InvalidRequest(message) => HttpTransportError::InvalidRequest(message.clone()),
-        // Not `Rejected`: the engine never retries that, at any idempotency
-        // level, because it reads as a settled refusal about the destination.
-        // Admission exhaustion is transient local backpressure that feeds no
-        // peer's circuit breaker, and a JWKS fetch asks for retries it would
-        // otherwise silently not get. `Connect` keeps the same delivery
-        // verdict — nothing was sent — while staying retryable.
+        // Admission exhaustion is local and unsent. `Connect` keeps it
+        // retryable; `Rejected` would suppress the engine's retries.
         SubRequestError::AdmissionTimeout { max_connections } => HttpTransportError::Connect(format!(
             "sub-request admission timeout (all {max_connections} slots busy)"
         )),
@@ -422,15 +331,13 @@ fn checked_authority<'a>(url: &str, uri: &'a http::Uri) -> Result<&'a http::uri:
 ///
 /// # Errors
 ///
-/// Returns [`HttpTransportError::InvalidRequest`] for a port that cannot be
-/// dialled. `Uri::port_u16` answers `None` both for "no port" and for digits
-/// that overflow `u16`, and defaulting the second case would quietly dial 80
-/// or 443 instead of the port the operator wrote. Only the authority still
-/// carries the text, so its length is what separates the two.
+/// Returns [`HttpTransportError::InvalidRequest`] for port zero or a
+/// value outside the `u16` range.
 fn checked_port(url: &str, authority: &http::uri::Authority, tls: bool) -> Result<u16, HttpTransportError> {
     match authority.port_u16() {
         Some(0) => Err(invalid(format!("url '{url}' names port 0, which cannot be dialled"))),
         Some(port) => Ok(port),
+        // `port_u16` also returns `None` for an overflowing explicit port.
         None if authority.as_str().len() > authority.host().len() => {
             Err(invalid(format!("url '{url}' has a port outside the range 1-65535")))
         },
@@ -451,10 +358,7 @@ fn invalid(message: String) -> HttpTransportError {
     HttpTransportError::InvalidRequest(message)
 }
 
-/// Shorthand for a failure that happened before anything was sent.
-///
-/// `Connect` is what the engine reads as "safe to retry, nothing was
-/// minted", which is the whole point of reporting it rather than a timeout.
+/// Build a retry-safe failure for a request that was not sent.
 fn unsent(message: String) -> HttpTransportError {
     HttpTransportError::Connect(message)
 }

@@ -23,157 +23,10 @@ use ppe::praxis_policy_core::http_retry::RetryPolicy;
 
 use super::*;
 
-// ---------------------------------------------------------------------------
-// Harness
-// ---------------------------------------------------------------------------
-
-/// A raw HTTP/1.1 backend on an OS thread, recording what it received.
-struct Backend {
-    /// Where the transport should dial.
-    address: SocketAddr,
-
-    /// Request heads seen, in arrival order.
-    heads: Arc<Mutex<Vec<String>>>,
-
-    /// Connections accepted.
-    connections: Arc<AtomicUsize>,
-}
-
-/// What a backend does once it has read a request.
-#[derive(Clone, Copy)]
-enum Reply {
-    /// Write these bytes, then wait for the next request on the same
-    /// connection.
-    Keepalive(&'static str),
-
-    /// Write these bytes, then stall without closing.
-    Stall(&'static str),
-
-    /// Close without answering.
-    Silence,
-}
-
-impl Backend {
-    /// Start a backend and return the address to dial.
-    fn spawn(reply: Reply) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let heads = Arc::new(Mutex::new(Vec::new()));
-        let connections = Arc::new(AtomicUsize::new(0));
-
-        let thread_heads = Arc::clone(&heads);
-        let thread_connections = Arc::clone(&connections);
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                thread_connections.fetch_add(1, Ordering::SeqCst);
-                let heads = Arc::clone(&thread_heads);
-                std::thread::spawn(move || serve(stream, reply, &heads));
-            }
-        });
-
-        Self {
-            address,
-            heads,
-            connections,
-        }
-    }
-
-    /// The request heads seen so far.
-    fn heads(&self) -> Vec<String> {
-        self.heads.lock().unwrap().clone()
-    }
-
-    /// How many connections were accepted.
-    fn connections(&self) -> usize {
-        self.connections.load(Ordering::SeqCst)
-    }
-
-    /// The URL that reaches this backend over plaintext.
-    fn url(&self, path: &str) -> String {
-        format!("http://{}{path}", self.address)
-    }
-}
-
-/// Read requests off one connection and answer each per `reply`.
-fn serve(mut stream: TcpStream, reply: Reply, heads: &Arc<Mutex<Vec<String>>>) {
-    loop {
-        let Some(head) = read_head(&mut stream) else { return };
-        drain_body(&mut stream, &head);
-        heads.lock().unwrap().push(head);
-        match reply {
-            Reply::Silence => return,
-            Reply::Keepalive(response) => {
-                if stream.write_all(response.as_bytes()).is_err() {
-                    return;
-                }
-                let _ignored = stream.flush();
-            },
-            Reply::Stall(response) => {
-                let _ignored = stream.write_all(response.as_bytes());
-                let _ignored = stream.flush();
-                // Block on a read the client never satisfies, so the
-                // connection stays open with the body outstanding.
-                while stream.read(&mut [0_u8; 1]).is_ok_and(|read| read > 0) {}
-                return;
-            },
-        }
-    }
-}
-
-/// Read one request head, or `None` when the peer closed.
-fn read_head(stream: &mut TcpStream) -> Option<String> {
-    let mut head = Vec::new();
-    let mut byte = [0_u8; 1];
-    while !head.ends_with(b"\r\n\r\n") {
-        match stream.read(&mut byte) {
-            Ok(0) | Err(_) => return None,
-            Ok(_) => head.push(byte[0]),
-        }
-    }
-    String::from_utf8(head).ok()
-}
-
-/// Consume the body a `Content-Length` head announces.
-fn drain_body(stream: &mut TcpStream, head: &str) {
-    let length = head
-        .lines()
-        .find_map(|line| {
-            line.strip_prefix("content-length: ")
-                .or_else(|| line.strip_prefix("Content-Length: "))
-        })
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(0);
-    if length > 0 {
-        let mut body = vec![0_u8; length];
-        let _ignored = stream.read_exact(&mut body);
-    }
-}
-
-/// A transport over its own pool, so no test depends on the process-wide
-/// holder or on another test's registration.
-fn transport(allow_private: bool) -> PolicyHttpTransport {
-    let transport = PolicyHttpTransport::new(allow_private);
-    transport
-        .client
-        .set(build_client(None))
-        .map_err(|_ignored| "client already set")
-        .unwrap();
-    transport
-}
-
-/// Reserve a port and release it, so a connect there is refused.
-fn closed_port() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    drop(listener);
-    address
-}
-
 const OK_RESPONSE: &str = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi";
 
 // ---------------------------------------------------------------------------
-// Error classification
+// Tests
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -241,10 +94,6 @@ fn every_transport_failure_maps_to_a_verdict_on_delivery() {
 
 #[test]
 fn a_starved_call_is_retryable_and_names_the_limit_it_hit() {
-    // Admission exhaustion is transient local backpressure. Reporting it
-    // as `Rejected` would read as a settled refusal, which the engine
-    // never retries at any idempotency level, so a JWKS fetch would
-    // silently lose the retries it asked for.
     let mapped = map_error(&SubRequestError::AdmissionTimeout { max_connections: 1 });
 
     assert!(
@@ -267,9 +116,6 @@ fn a_starved_call_is_retryable_and_names_the_limit_it_hit() {
 
 #[test]
 fn an_open_circuit_stays_a_refusal_and_is_not_retried() {
-    // The counterpart to the case above: an open circuit recovers on a
-    // window measured in seconds, so repeating it inside one call is
-    // pointless and `Rejected` is the honest verdict.
     let mapped = map_error(&SubRequestError::CircuitOpen {
         peer: "10.0.0.1:443".to_owned(),
     });
@@ -281,10 +127,6 @@ fn an_open_circuit_stays_a_refusal_and_is_not_retried() {
         "retrying an open circuit only feeds it"
     );
 }
-
-// ---------------------------------------------------------------------------
-// URL handling
-// ---------------------------------------------------------------------------
 
 #[test]
 fn an_https_url_dials_port_443_with_the_host_as_sni() {
@@ -329,7 +171,6 @@ fn an_ipv6_host_is_bracketed_for_dialling_and_carries_no_sni() {
 
 #[test]
 fn an_ip_literal_over_plaintext_is_accepted() {
-    // The loopback JWKS endpoint an operator points a test deployment at.
     let target = Target::parse("http://127.0.0.1:9000/jwks").unwrap();
     assert_eq!(target.dial_authority, "127.0.0.1:9000");
     assert_eq!(target.sni, "");
@@ -382,8 +223,6 @@ fn userinfo_is_refused_rather_than_silently_dropped() {
 
 #[test]
 fn the_userinfo_refusal_does_not_repeat_the_credential() {
-    // This refusal fires exactly when the string is known to hold a
-    // secret, and the message reaches a startup log line.
     let err = Target::parse("https://svc:S3cretPassw0rd@idp.example.com/jwks").unwrap_err();
     let message = err.to_string();
     assert!(
@@ -396,9 +235,6 @@ fn the_userinfo_refusal_does_not_repeat_the_credential() {
 
 #[test]
 fn a_port_outside_the_u16_range_is_refused_not_defaulted() {
-    // `port_u16()` answers None both for "no port" and for digits that
-    // overflow, so defaulting the second case would dial 80 while the
-    // Host header still said :99999.
     for url in [
         "http://idp.example.com:99999/jwks",
         "https://idp.example.com:70000/jwks",
@@ -424,15 +260,9 @@ fn port_zero_is_refused() {
 
 #[test]
 fn a_bracketed_ipv6_host_without_a_port_still_gets_the_scheme_default() {
-    // The out-of-range check compares authority and host lengths, and a
-    // bracketed host is where that could go wrong.
     let target = Target::parse("http://[::1]/jwks").unwrap();
     assert_eq!(target.dial_authority, "[::1]:80");
 }
-
-// ---------------------------------------------------------------------------
-// Peer construction
-// ---------------------------------------------------------------------------
 
 #[test]
 fn a_tls_peer_verifies_the_certificate_and_the_hostname() {
@@ -463,9 +293,6 @@ fn a_policy_peer_never_shares_a_pool_entry_with_a_data_plane_peer() {
     let address: SocketAddr = "203.0.113.10:443".parse().unwrap();
     let sni = "idp.internal".to_owned();
 
-    // What makes the group key necessary: a peer's reuse hash does not
-    // cover `options.ca`, so a cluster pinning a private CA is
-    // indistinguishable from one using the default trust store.
     let mut with_ca = HttpPeer::new(address, true, sni.clone());
     with_ca.options.ca = Some(Arc::from(Vec::new()));
     let without_ca = HttpPeer::new(address, true, sni.clone());
@@ -475,7 +302,6 @@ fn a_policy_peer_never_shares_a_pool_entry_with_a_data_plane_peer() {
         "if these ever differ, the group key below is no longer the thing keeping them apart"
     );
 
-    // So the policy peer has to be distinguishable some other way.
     let policy = Target::parse("https://idp.internal/jwks")
         .unwrap()
         .peer(address, Some(Duration::from_secs(1)));
@@ -486,14 +312,8 @@ fn a_policy_peer_never_shares_a_pool_entry_with_a_data_plane_peer() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Egress
-// ---------------------------------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread")]
 async fn a_non_public_destination_is_refused_before_a_socket_is_opened() {
-    // Dialling the closed port would report Connect; Rejected proves the
-    // refusal happened first.
     let closed = closed_port();
     let transport = transport(false);
     for url in [
@@ -549,7 +369,6 @@ async fn allowing_private_destinations_lets_a_loopback_idp_be_dialled() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_host_that_does_not_resolve_reports_a_connect_failure() {
-    // Nothing was sent, so a token exchange must stay free to retry.
     let err = transport(true)
         .execute(HttpRequest::get("https://policy-transport-test.invalid/jwks").timeout(Duration::from_secs(5)))
         .await
@@ -573,15 +392,8 @@ async fn a_hostname_resolving_only_to_loopback_is_refused_not_dialled() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Limits and deadlines
-// ---------------------------------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread")]
 async fn resolution_is_charged_against_the_callers_deadline() {
-    // A resolver that outlasts the budget must not become the caller's
-    // problem later: the client's clock only starts once a peer exists, so
-    // nothing else would bound this.
     let target = Target::parse("https://policy-transport-slow.invalid/jwks").unwrap();
     let err = transport(true)
         .resolve_within(&target, Duration::from_nanos(1))
@@ -597,10 +409,6 @@ async fn resolution_is_charged_against_the_callers_deadline() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_budget_spent_on_resolution_is_reported_as_unsent_not_as_a_timeout() {
-    // A literal address resolves on the first poll, so the lookup succeeds
-    // even on a zero budget and the exhausted-remainder branch is what
-    // fires. Handing zero to the client instead would surface
-    // `DeadlineExceeded`, which reads as possibly-delivered.
     let target = Target::parse("http://127.0.0.1:9/jwks").unwrap();
     let err = transport(true)
         .resolve_within(&target, Duration::ZERO)
@@ -667,8 +475,6 @@ async fn a_per_request_ceiling_is_enforced_below_the_transport_ceiling() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_jwks_sized_body_fits_under_the_transport_ceiling() {
-    // The regression the transport's own ceiling exists for: a deployment
-    // with a tight proxy-wide response limit must not clamp a JWKS fetch.
     const BODY_BYTES: usize = 256 * 1024;
     let head = format!("HTTP/1.1 200 OK\r\nContent-Length: {BODY_BYTES}\r\n\r\n");
     let response: &'static str = Box::leak(format!("{head}{}", "k".repeat(BODY_BYTES)).into_boxed_str());
@@ -687,8 +493,6 @@ async fn a_jwks_sized_body_fits_under_the_transport_ceiling() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_body_that_stalls_past_the_deadline_times_out() {
-    // Headers arrive immediately and the body never does, so a deadline
-    // that only covered the head would hang here forever.
     let backend = Backend::spawn(Reply::Stall("HTTP/1.1 200 OK\r\nContent-Length: 32\r\n\r\n"));
     let err = transport(true)
         .execute(HttpRequest::get(backend.url("/jwks")).timeout(Duration::from_millis(300)))
@@ -700,9 +504,6 @@ async fn a_body_that_stalls_past_the_deadline_times_out() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unreachable_peer_reports_a_connect_failure_not_a_timeout() {
-    // Without a connect bound the overall deadline would fire first and a
-    // token exchange would record an unknown mint for a request that was
-    // never sent.
     let err = transport(true)
         .execute(
             HttpRequest::get("http://192.0.2.1:443/token")
@@ -717,10 +518,6 @@ async fn an_unreachable_peer_reports_a_connect_failure_not_a_timeout() {
     );
     assert!(!err.may_have_reached_peer());
 }
-
-// ---------------------------------------------------------------------------
-// Header fidelity
-// ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread")]
 async fn authorization_reaches_the_backend_verbatim() {
@@ -780,10 +577,6 @@ async fn conditional_refresh_headers_survive_the_response() {
     assert_eq!(response.cache_max_age(), Some(Duration::from_secs(600)));
 }
 
-// ---------------------------------------------------------------------------
-// No retries
-// ---------------------------------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failed_exchange_is_never_resent() {
     for (method, body) in [
@@ -804,10 +597,6 @@ async fn a_failed_exchange_is_never_resent() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Client construction and runtime binding
-// ---------------------------------------------------------------------------
-
 #[test]
 fn a_new_transport_holds_no_client_and_has_opened_no_socket() {
     let transport = PolicyHttpTransport::new(false);
@@ -819,9 +608,6 @@ fn a_new_transport_holds_no_client_and_has_opened_no_socket() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_transport_that_was_never_handed_a_client_builds_its_own_and_dispatches() {
-    // Every other socket-level test injects a client, which skips
-    // `client()` — the one path production actually takes, and the only
-    // reader of the process-wide holder.
     let backend = Backend::spawn(Reply::Keepalive(OK_RESPONSE));
     let transport = PolicyHttpTransport::new(true);
     assert!(transport.client.get().is_none(), "nothing built yet");
@@ -851,8 +637,6 @@ fn the_registered_connector_is_the_one_policy_calls_use() {
 
 #[test]
 fn two_transports_from_one_registration_share_a_pool() {
-    // The hot-reload case: a fresh engine and transport per reload, one
-    // pool for the process.
     let shared = SubRequestConnector::new(16, None);
     let first = build_client(Some(&shared));
     let second = build_client(Some(&shared));
@@ -878,8 +662,6 @@ async fn a_pool_outlives_the_runtime_that_built_the_transport() {
     let url = backend.url("/jwks");
 
     let transport = Arc::new(transport(true));
-    // A current-thread runtime on its own thread is what constructs the
-    // filter and drives the boot JWKS fetch.
     let init = Arc::clone(&transport);
     let init_url = url.clone();
     std::thread::spawn(move || {
@@ -894,13 +676,153 @@ async fn a_pool_outlives_the_runtime_that_built_the_transport() {
     .join()
     .unwrap();
 
-    // The pool now holds an entry whose idle watcher died with that
-    // runtime. Taking it must not deadlock and must not hand back a
-    // poisoned stream.
     let response = transport
         .execute(HttpRequest::get(url).timeout(Duration::from_secs(5)))
         .await
         .unwrap();
     assert_eq!(response.status, 200);
     assert_eq!(backend.heads().len(), 2, "both requests reached the backend");
+}
+
+// ---------------------------------------------------------------------------
+// Test Utilities
+// ---------------------------------------------------------------------------
+
+/// Raw HTTP/1.1 test backend that records received request heads.
+struct Backend {
+    /// Listening address.
+    address: SocketAddr,
+
+    /// Request heads in arrival order.
+    heads: Arc<Mutex<Vec<String>>>,
+
+    /// Accepted connection count.
+    connections: Arc<AtomicUsize>,
+}
+
+/// Test-backend response behavior.
+#[derive(Clone, Copy)]
+enum Reply {
+    /// Reply and keep the connection open.
+    Keepalive(&'static str),
+
+    /// Reply with headers, then stall.
+    Stall(&'static str),
+
+    /// Close without replying.
+    Silence,
+}
+
+impl Backend {
+    /// Start a test backend.
+    fn spawn(reply: Reply) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let heads = Arc::new(Mutex::new(Vec::new()));
+        let connections = Arc::new(AtomicUsize::new(0));
+
+        let thread_heads = Arc::clone(&heads);
+        let thread_connections = Arc::clone(&connections);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                thread_connections.fetch_add(1, Ordering::SeqCst);
+                let heads = Arc::clone(&thread_heads);
+                std::thread::spawn(move || serve(stream, reply, &heads));
+            }
+        });
+
+        Self {
+            address,
+            heads,
+            connections,
+        }
+    }
+
+    /// Return recorded request heads.
+    fn heads(&self) -> Vec<String> {
+        self.heads.lock().unwrap().clone()
+    }
+
+    /// Return the accepted connection count.
+    fn connections(&self) -> usize {
+        self.connections.load(Ordering::SeqCst)
+    }
+
+    /// Build a plaintext URL for this backend.
+    fn url(&self, path: &str) -> String {
+        format!("http://{}{path}", self.address)
+    }
+}
+
+/// Serve requests on one test connection.
+fn serve(mut stream: TcpStream, reply: Reply, heads: &Arc<Mutex<Vec<String>>>) {
+    loop {
+        let Some(head) = read_head(&mut stream) else { return };
+        drain_body(&mut stream, &head);
+        heads.lock().unwrap().push(head);
+        match reply {
+            Reply::Silence => return,
+            Reply::Keepalive(response) => {
+                if stream.write_all(response.as_bytes()).is_err() {
+                    return;
+                }
+                let _ignored = stream.flush();
+            },
+            Reply::Stall(response) => {
+                let _ignored = stream.write_all(response.as_bytes());
+                let _ignored = stream.flush();
+                while stream.read(&mut [0_u8; 1]).is_ok_and(|read| read > 0) {}
+                return;
+            },
+        }
+    }
+}
+
+/// Read one request head.
+fn read_head(stream: &mut TcpStream) -> Option<String> {
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match stream.read(&mut byte) {
+            Ok(0) | Err(_) => return None,
+            Ok(_) => head.push(byte[0]),
+        }
+    }
+    String::from_utf8(head).ok()
+}
+
+/// Consume the body announced by `Content-Length`.
+fn drain_body(stream: &mut TcpStream, head: &str) {
+    let length = head
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("content-length: ")
+                .or_else(|| line.strip_prefix("Content-Length: "))
+        })
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    if length > 0 {
+        let mut body = vec![0_u8; length];
+        let _ignored = stream.read_exact(&mut body);
+    }
+}
+
+/// Build a transport with a private test pool.
+fn transport(allow_private: bool) -> PolicyHttpTransport {
+    let transport = PolicyHttpTransport::new(allow_private);
+    transport
+        .client
+        .set(build_client(None))
+        .map_err(|_ignored| "client already set")
+        .unwrap();
+    transport
+}
+
+/// Reserve and release a port.
+fn closed_port() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    address
 }

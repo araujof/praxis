@@ -26,11 +26,7 @@ use std::sync::OnceLock;
 
 use praxis_core::subrequest::SubRequestConnector;
 
-/// A set-once holder for the connector policy calls borrow.
-///
-/// A named type rather than a bare `static` so the set-once rules can be
-/// tested on an owned holder. Sharing the process-wide one would make each
-/// test's result depend on which test registered first.
+/// Set-once storage for the connector policy calls borrow.
 #[derive(Debug)]
 struct ConnectorHolder(OnceLock<SubRequestConnector>);
 
@@ -108,7 +104,6 @@ mod tests {
 
     #[test]
     fn storing_the_held_connector_again_succeeds() {
-        // What a config reload does: same pool, freshly wrapped client.
         let holder = ConnectorHolder::new();
         let held = SubRequestConnector::new(8, None);
         assert!(holder.set(&held));
@@ -130,10 +125,6 @@ mod tests {
         );
     }
 
-    /// Registration order across the test binary is not this test's
-    /// business, so it asserts only the invariant that holds either way:
-    /// the return value tells the caller whether readers will see the
-    /// connector it passed.
     #[test]
     fn the_public_setter_and_reader_agree_on_the_process_holder() {
         let connector = SubRequestConnector::new(4, None);

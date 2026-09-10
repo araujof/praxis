@@ -42,11 +42,8 @@ ambiguous configuration:
   trust decision. Certificate and hostname
   verification are always on. Cluster `tls` settings
   do not reach these calls, so a private-CA or mTLS
-  identity provider is not supported today.
-- Policy engine connections are kept out of the
-  data-plane keepalive pool by a dedicated peer group
-  key, so a connection established under a cluster's
-  private CA is never reused for a policy call.
+  identity provider is not supported today, and policy
+  calls cannot reuse cluster-TLS connections.
 - Root execution (UID 0) rejected by default.
 - Supply chain audited via `cargo audit` and
   `cargo deny`.
