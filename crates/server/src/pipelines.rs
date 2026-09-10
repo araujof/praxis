@@ -74,7 +74,13 @@ pub fn build_subrequest_client(config: &Config) -> SubRequestClient {
 /// to hand it a client.
 #[cfg(feature = "policy-engine")]
 fn register_policy_connector(client: &SubRequestClient) {
-    praxis_filter::set_policy_subrequest_connector(client.connector());
+    // A refusal means a different pool is already held, so policy calls will
+    // not be using this one. The setter warns; say which client was dropped.
+    if !praxis_filter::set_policy_subrequest_connector(client.connector()) {
+        tracing::warn!(
+            "policy calls keep an earlier sub-request pool; this config's runtime.subrequest_* settings do not reach them"
+        );
+    }
 }
 
 /// No policy engine is compiled in, so there is nothing to register.

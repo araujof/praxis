@@ -17,7 +17,9 @@ On the body phase, the filter consumes protocol classifier filter metadata (from
 
 `body_access: read_write` enables the JSON-RPC re-serialization round-trip so APL field mutators (`redact()`, `assign()`) rewrite the upstream request body and the downstream response.
 
-Outbound policy calls — a JWKS fetch, an RFC 8693 token exchange, a CIBA backchannel call — go through the proxy's sub-request connector, so `runtime.subrequest_pool_size`, `runtime.subrequest_max_connections`, `runtime.subrequest_circuit_breaker`, and the proxy's TLS trust configuration apply to them, and they are HTTP/1.1. `body_limits.max_response_bytes` deliberately does not apply: policy calls keep their own 1 MiB ceiling so a tight proxy-wide response limit cannot fail a JWKS fetch.
+Outbound policy calls — a JWKS fetch, an RFC 8693 token exchange, a CIBA backchannel call — go through the proxy's sub-request connector, so `runtime.subrequest_pool_size`, `runtime.subrequest_max_connections` and `runtime.subrequest_circuit_breaker` apply to them, and they are HTTP/1.1. Sharing `runtime.subrequest_max_connections` means heavy sub-request load can refuse a policy call, so size it for both. `body_limits.max_response_bytes` deliberately does not apply: policy calls keep their own 1 MiB ceiling so a tight proxy-wide response limit cannot fail a JWKS fetch.
+
+TLS for these calls verifies against the platform trust store, which honours `SSL_CERT_FILE` and `SSL_CERT_DIR`, so an image must ship CA certificates. Cluster `tls` settings do not apply — a policy URL belongs to no cluster — so there is no way to pin a private CA or present a client certificate to an identity provider. Certificate and hostname verification are always on. Two URLs are refused for that reason: an `https` URL naming an IP literal, which carries no SNI to verify against, and a host whose resolved address is private unless `allow_private_idp` is set.
 
 Praxis filter configs are flat: the filter's typed fields sit directly under the `- filter:` entry alongside the structural keys (`name`, `conditions`), not nested under a `config:` wrapper. See `examples/configs/security/policy.yaml` for a runnable example.
 

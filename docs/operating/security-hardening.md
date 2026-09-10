@@ -35,6 +35,18 @@ ambiguous configuration:
   there is no second lookup to rebind. Override with
   the `policy` filter's `allow_private_idp` for an
   in-cluster identity provider.
+- Policy engine TLS verifies against the platform
+  trust store, which honours `SSL_CERT_FILE` and
+  `SSL_CERT_DIR`, so an image must ship CA
+  certificates and those variables are part of the
+  trust decision. Certificate and hostname
+  verification are always on. Cluster `tls` settings
+  do not reach these calls, so a private-CA or mTLS
+  identity provider is not supported today.
+- Policy engine connections are kept out of the
+  data-plane keepalive pool by a dedicated peer group
+  key, so a connection established under a cluster's
+  private CA is never reused for a policy call.
 - Root execution (UID 0) rejected by default.
 - Supply chain audited via `cargo audit` and
   `cargo deny`.

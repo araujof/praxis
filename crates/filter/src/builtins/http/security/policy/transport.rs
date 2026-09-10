@@ -7,9 +7,8 @@
 //! The engine performs no HTTP itself: a JWKS fetch, an RFC 8693 token
 //! exchange, and a CIBA backchannel call all go through a transport the
 //! host installs. Installing this one means a `policy-engine` build has a
-//! single HTTP stack — one keepalive pool per process, the proxy's TLS
-//! trust configuration, and an egress path the operator can see — instead
-//! of a second client with its own pool and its own trust store.
+//! single HTTP stack — one connector per process and an egress path the
+//! operator can see — instead of a second client with its own pool.
 //!
 //! # What policy calls now inherit
 //!
@@ -25,9 +24,28 @@
 //! Per-request limits still win, since the client clamps to the smaller
 //! of the two.
 //!
-//! Calls are HTTP/1.1 only — Pingora peers built here advertise no h2 —
-//! and they carry no client certificate or private CA, because a policy
-//! URL has no cluster TLS config to draw one from.
+//! The admission limit is shared in both directions, and the damaging one
+//! is the data plane starving identity: a saturated limit refuses a JWKS
+//! refresh or a token exchange. Such a refusal is reported as `Connect`
+//! rather than `Rejected` so the engine's own retry policy still applies
+//! to it — see [`map_error`].
+//!
+//! Calls are HTTP/1.1 only, because Pingora peers built here advertise no
+//! h2.
+//!
+//! # TLS
+//!
+//! Verification is against the platform trust store, which honours
+//! `SSL_CERT_FILE` and `SSL_CERT_DIR`, and not the compiled-in bundle the
+//! engine's own client used. Certificate and hostname verification stay
+//! on. Cluster TLS config does not reach these peers — a policy URL
+//! belongs to no cluster — so a policy call presents no client
+//! certificate and cannot pin a private CA.
+//!
+//! Peers carry a dedicated group key so their connections are never
+//! interchanged with data-plane ones. A peer's reuse hash does not cover
+//! `options.ca`, so without it a connection verified against a cluster's
+//! private CA could serve a policy call that never trusted that CA.
 //!
 //! # Egress
 //!
@@ -37,11 +55,16 @@
 //! [`private_address_reason`], shared with the transport it replaces so
 //! the two cannot drift, and `allow_private_idp` remains the escape hatch
 //! for a loopback or in-cluster identity provider. Only the one address
-//! that gets dialled is judged: a host answering with both a public and a
-//! private address is no longer refused outright, because the private one is
-//! never reached. The address may come from the process DNS cache; that is
-//! not a bypass, since the address checked is the address dialled either
-//! way.
+//! that gets dialled is judged. Resolution picks a single preferred
+//! address, so a host answering with both a public and a private one is
+//! refused whenever the private answer is the preferred one, rather than
+//! falling back to the public answer. The address may come from the
+//! process DNS cache; that is not a bypass, since the address checked is
+//! the address dialled either way.
+//!
+//! Resolving the name is charged against the caller's deadline. The
+//! client's own clock starts once a peer exists, so a lookup left
+//! unbounded would be covered by nothing.
 //!
 //! # Retries
 //!
@@ -73,6 +96,16 @@ use praxis_core::{
 
 use super::shared_connector::shared_policy_connector;
 
+/// Isolates policy connections within the shared keepalive pool.
+///
+/// A peer's reuse hash covers `verify_cert`, `verify_hostname` and the
+/// client certificate, but not `options.ca`. Without a distinct group key a
+/// data-plane connection verified against a cluster's private CA would be
+/// handed to a policy call that never trusted that CA, and the reverse.
+/// Pingora hashes this field, so it partitions the pool without needing a
+/// second connector, admission semaphore, or breaker registry.
+const POLICY_PEER_GROUP: u64 = 0x706F_6C69_6379_5F31; // "policy_1"
+
 /// Performs the policy engine's outbound HTTP over the proxy's connector.
 ///
 /// Install one per engine with `PolicyEngine::set_http_transport`. The
@@ -102,6 +135,45 @@ impl PolicyHttpTransport {
         self.client.get_or_init(|| build_client(shared_policy_connector()))
     }
 
+    /// Resolve the destination inside `budget`, returning what is left of it.
+    ///
+    /// Name resolution is charged against the caller's deadline. Left
+    /// unbounded it is not covered by anything: the client's clock starts
+    /// after this returns, and a stalled resolver would outlast the deadline
+    /// the caller declared.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HttpTransportError::Connect`] when the name does not
+    /// resolve, when resolving it outlasts `budget`, and when resolution
+    /// leaves nothing to spend on the exchange. `Connect` in every case
+    /// because nothing was sent, so a token exchange stays free to retry
+    /// instead of reconciling a mint that never happened.
+    async fn resolve_within(
+        &self,
+        target: &Target,
+        budget: Duration,
+    ) -> Result<(SocketAddr, Duration), HttpTransportError> {
+        let authority = &target.dial_authority;
+        let started = tokio::time::Instant::now();
+
+        let address = tokio::time::timeout(budget, peer_utils::resolve_address(authority))
+            .await
+            .map_err(|_elapsed| unsent(format!("resolve '{authority}': deadline exceeded")))?
+            .map_err(|e| unsent(format!("resolve '{authority}': {e}")))?;
+
+        // The client turns a zero budget into `DeadlineExceeded`, which reads
+        // as a possibly-delivered request. Nothing has been sent yet, so say
+        // so here instead.
+        let remaining = budget.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(unsent(format!(
+                "resolve '{authority}': deadline exceeded before the request could be sent"
+            )));
+        }
+        Ok((address, remaining))
+    }
+
     /// Refuse a destination the shared address table rules out.
     fn check_egress(&self, address: SocketAddr, host: &str) -> Result<(), HttpTransportError> {
         match private_address_reason(&address.ip()).filter(|_| !self.allow_private) {
@@ -129,9 +201,7 @@ impl HttpTransport for PolicyHttpTransport {
     )]
     async fn execute(&self, req: HttpRequest) -> Result<HttpResponse, HttpTransportError> {
         let target = Target::parse(&req.url)?;
-        let address = peer_utils::resolve_address(&target.dial_authority)
-            .await
-            .map_err(|e| HttpTransportError::Connect(format!("resolve '{}': {e}", target.dial_authority)))?;
+        let (address, remaining) = self.resolve_within(&target, req.timeout).await?;
         self.check_egress(address, &target.host_header)?;
 
         let peer = target.peer(address, req.connect_timeout);
@@ -146,7 +216,7 @@ impl HttpTransport for PolicyHttpTransport {
         );
 
         self.client()
-            .execute(&peer, &sub_request, req.max_response_bytes, req.timeout, None)
+            .execute(&peer, &sub_request, req.max_response_bytes, remaining, None)
             .await
             .map(into_http_response)
             .map_err(|e| map_error(&e))
@@ -183,7 +253,13 @@ fn into_http_response(response: SubResponse) -> HttpResponse {
 fn map_error(error: &SubRequestError) -> HttpTransportError {
     match error {
         SubRequestError::InvalidRequest(message) => HttpTransportError::InvalidRequest(message.clone()),
-        SubRequestError::AdmissionTimeout { max_connections } => HttpTransportError::Rejected(format!(
+        // Not `Rejected`: the engine never retries that, at any idempotency
+        // level, because it reads as a settled refusal about the destination.
+        // Admission exhaustion is transient local backpressure that feeds no
+        // peer's circuit breaker, and a JWKS fetch asks for retries it would
+        // otherwise silently not get. `Connect` keeps the same delivery
+        // verdict — nothing was sent — while staying retryable.
+        SubRequestError::AdmissionTimeout { max_connections } => HttpTransportError::Connect(format!(
             "sub-request admission timeout (all {max_connections} slots busy)"
         )),
         SubRequestError::CircuitOpen { peer } => HttpTransportError::Rejected(format!("circuit open for peer {peer}")),
@@ -238,9 +314,9 @@ impl Target {
         let tls = dial_tls(url, uri.scheme_str())?;
         let authority = checked_authority(url, &uri)?;
         let host = authority.host();
-        let dial_authority = format!("{host}:{}", uri.port_u16().unwrap_or(if tls { 443 } else { 80 }));
+        let dial_authority = format!("{host}:{}", checked_port(url, authority, tls)?);
 
-        if tls && is_ip_literal(host) {
+        if tls && peer_utils::is_ip_literal(host) {
             return Err(invalid(format!(
                 "url '{url}' uses https with an IP literal, which carries no SNI for certificate verification"
             )));
@@ -268,6 +344,7 @@ impl Target {
     fn peer(&self, address: SocketAddr, connect_timeout: Option<Duration>) -> HttpPeer {
         let connect = connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT);
         let mut peer = HttpPeer::new(address, self.tls, self.sni.clone());
+        peer.group_key = POLICY_PEER_GROUP;
         peer_utils::apply_connection_options(
             &mut peer,
             &ConnectionOptions {
@@ -331,9 +408,34 @@ fn checked_authority<'a>(url: &str, uri: &'a http::Uri) -> Result<&'a http::uri:
     // `Authority::host()` drops userinfo silently, so dialling would
     // discard credentials the operator wrote into the URL.
     if authority.as_str().contains('@') {
-        return Err(invalid(format!("url '{url}' carries userinfo, which is not forwarded")));
+        // The URL is deliberately not echoed: this is the one refusal that
+        // fires when the string is known to hold a credential, and a log
+        // line travels further than the config it came from.
+        return Err(invalid(
+            "url carries userinfo, which is not forwarded; use a header or a client-credentials flow".to_owned(),
+        ));
     }
     Ok(authority)
+}
+
+/// The port to dial: the URL's own, or the scheme default.
+///
+/// # Errors
+///
+/// Returns [`HttpTransportError::InvalidRequest`] for a port that cannot be
+/// dialled. `Uri::port_u16` answers `None` both for "no port" and for digits
+/// that overflow `u16`, and defaulting the second case would quietly dial 80
+/// or 443 instead of the port the operator wrote. Only the authority still
+/// carries the text, so its length is what separates the two.
+fn checked_port(url: &str, authority: &http::uri::Authority, tls: bool) -> Result<u16, HttpTransportError> {
+    match authority.port_u16() {
+        Some(0) => Err(invalid(format!("url '{url}' names port 0, which cannot be dialled"))),
+        Some(port) => Ok(port),
+        None if authority.as_str().len() > authority.host().len() => {
+            Err(invalid(format!("url '{url}' has a port outside the range 1-65535")))
+        },
+        None => Ok(if tls { 443 } else { 80 }),
+    }
 }
 
 /// The origin-form request target: path and query, or `/` when the URL
@@ -344,18 +446,17 @@ fn request_uri(url: &http::Uri) -> http::Uri {
         .unwrap_or_else(|| http::Uri::from_static("/"))
 }
 
-/// Whether a URI host is an IP literal rather than a DNS name.
-fn is_ip_literal(host: &str) -> bool {
-    host.strip_prefix('[')
-        .and_then(|h| h.strip_suffix(']'))
-        .unwrap_or(host)
-        .parse::<std::net::IpAddr>()
-        .is_ok()
-}
-
 /// Shorthand for the malformed-request case.
 fn invalid(message: String) -> HttpTransportError {
     HttpTransportError::InvalidRequest(message)
+}
+
+/// Shorthand for a failure that happened before anything was sent.
+///
+/// `Connect` is what the engine reads as "safe to retry, nothing was
+/// minted", which is the whole point of reporting it rather than a timeout.
+fn unsent(message: String) -> HttpTransportError {
+    HttpTransportError::Connect(message)
 }
 
 #[cfg(test)]

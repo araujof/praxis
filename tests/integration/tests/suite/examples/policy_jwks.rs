@@ -8,9 +8,14 @@
 //! of them prove the engine can reach the network at all. Here the
 //! `identity/jwt` plugin is configured with a `jwks_url` pointing at a
 //! local server, and a request carrying a token signed by the key that
-//! server publishes is accepted — which only happens if the key set was
-//! fetched over the proxy's sub-request client during filter
-//! construction.
+//! server publishes is accepted — so the key set was fetched during
+//! filter construction.
+//!
+//! What this does not do is distinguish *which* client fetched it. The
+//! engine's bundled transport is no longer compiled in, so there is no
+//! other client it could have been, but that follows from the dependency
+//! graph rather than from anything asserted here. The transport's own
+//! unit tests are what pin the connector.
 
 use std::{
     collections::HashMap,
@@ -189,10 +194,7 @@ fn a_token_signed_by_the_published_jwks_key_is_accepted() {
     let config = load_jwks_policy_example(proxy_port, backend_guard.port(), &policy_path);
     let proxy = start_proxy(&config);
 
-    assert!(
-        jwks.fetches() >= 1,
-        "constructing the filter must fetch the key set over the proxy's client"
-    );
+    assert!(jwks.fetches() >= 1, "constructing the filter must fetch the key set");
 
     let token = mint_jwks_signed_jwt("alice");
     let body = r#"{"jsonrpc":"2.0","id":1,"method":"service/invoke","params":{"name":"echo","arguments":{}}}"#;

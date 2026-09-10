@@ -26,8 +26,39 @@ use std::sync::OnceLock;
 
 use praxis_core::subrequest::SubRequestConnector;
 
+/// A set-once holder for the connector policy calls borrow.
+///
+/// A named type rather than a bare `static` so the set-once rules can be
+/// tested on an owned holder. Sharing the process-wide one would make each
+/// test's result depend on which test registered first.
+#[derive(Debug)]
+struct ConnectorHolder(OnceLock<SubRequestConnector>);
+
+impl ConnectorHolder {
+    /// An empty holder.
+    const fn new() -> Self {
+        Self(OnceLock::new())
+    }
+
+    /// Store `connector`, or keep the one already held.
+    ///
+    /// Returns whether the held pool is the one passed in, so storing the
+    /// same pool twice succeeds and a second pool is refused.
+    fn set(&self, connector: &SubRequestConnector) -> bool {
+        std::ptr::eq(
+            self.0.get_or_init(|| connector.clone()).connector(),
+            connector.connector(),
+        )
+    }
+
+    /// The held connector, if one was stored.
+    fn get(&self) -> Option<&SubRequestConnector> {
+        self.0.get()
+    }
+}
+
 /// The registered connector, or none when the host never registered one.
-static POLICY_CONNECTOR: OnceLock<SubRequestConnector> = OnceLock::new();
+static POLICY_CONNECTOR: ConnectorHolder = ConnectorHolder::new();
 
 /// Register the connector policy calls share with the data plane.
 ///
@@ -39,11 +70,9 @@ static POLICY_CONNECTOR: OnceLock<SubRequestConnector> = OnceLock::new();
 /// nothing, which is what a config reload does. Registering a *different*
 /// one returns `false` and keeps the first: a second pool is the thing
 /// this registration exists to prevent.
+#[must_use]
 pub fn set_policy_subrequest_connector(connector: &SubRequestConnector) -> bool {
-    if std::ptr::eq(
-        POLICY_CONNECTOR.get_or_init(|| connector.clone()).connector(),
-        connector.connector(),
-    ) {
+    if POLICY_CONNECTOR.set(connector) {
         return true;
     }
     tracing::warn!(
@@ -64,37 +93,56 @@ pub(super) fn shared_policy_connector() -> Option<&'static SubRequestConnector> 
 mod tests {
     use super::*;
 
-    /// Set-once is process-wide, so the whole holder is one test: a
-    /// second test registering a different connector could not observe
-    /// its own value.
     #[test]
-    fn the_first_registration_wins_and_is_what_readers_see() {
-        assert!(shared_policy_connector().is_none(), "nothing registered yet");
+    fn a_holder_hands_back_the_connector_it_was_given() {
+        let holder = ConnectorHolder::new();
+        assert!(holder.get().is_none(), "an empty holder holds nothing");
 
         let first = SubRequestConnector::new(8, None);
-        assert!(set_policy_subrequest_connector(&first));
+        assert!(holder.set(&first), "the first registration is accepted");
         assert!(
-            std::ptr::eq(
-                shared_policy_connector().expect("registered").connector(),
-                first.connector()
-            ),
+            std::ptr::eq(holder.get().expect("registered").connector(), first.connector()),
             "readers see the registered pool, not a fresh one"
         );
+    }
 
+    #[test]
+    fn storing_the_held_connector_again_succeeds() {
+        // What a config reload does: same pool, freshly wrapped client.
+        let holder = ConnectorHolder::new();
+        let held = SubRequestConnector::new(8, None);
+        assert!(holder.set(&held));
+        assert!(holder.set(&held), "a reload must not fail on the pool it already holds");
+    }
+
+    #[test]
+    fn a_second_connector_is_refused_and_the_first_survives() {
+        let holder = ConnectorHolder::new();
+        let first = SubRequestConnector::new(8, None);
+        assert!(holder.set(&first));
         assert!(
-            set_policy_subrequest_connector(&first),
-            "re-registering the held pool is what a reload does, and must not fail"
+            !holder.set(&SubRequestConnector::new(1, None)),
+            "a second pool is what this holder exists to refuse"
         );
         assert!(
-            !set_policy_subrequest_connector(&SubRequestConnector::new(1, None)),
-            "a different connector is refused"
-        );
-        assert!(
-            std::ptr::eq(
-                shared_policy_connector().expect("still registered").connector(),
-                first.connector()
-            ),
+            std::ptr::eq(holder.get().expect("still registered").connector(), first.connector()),
             "the refused registration did not replace the first"
+        );
+    }
+
+    /// Registration order across the test binary is not this test's
+    /// business, so it asserts only the invariant that holds either way:
+    /// the return value tells the caller whether readers will see the
+    /// connector it passed.
+    #[test]
+    fn the_public_setter_and_reader_agree_on_the_process_holder() {
+        let connector = SubRequestConnector::new(4, None);
+        let accepted = set_policy_subrequest_connector(&connector);
+        let held = shared_policy_connector().expect("a connector is registered now");
+        assert_eq!(
+            accepted,
+            std::ptr::eq(held.connector(), connector.connector()),
+            "the return value must say whether the reader sees this pool"
         );
     }
 }

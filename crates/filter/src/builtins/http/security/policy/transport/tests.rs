@@ -18,6 +18,8 @@ use std::{
 
 use bytes::Bytes;
 use http::Method;
+use pingora_core::upstreams::peer::Peer as _;
+use ppe::praxis_policy_core::http_retry::RetryPolicy;
 
 use super::*;
 
@@ -185,7 +187,7 @@ fn every_transport_failure_maps_to_a_verdict_on_delivery() {
         ),
         (
             SubRequestError::AdmissionTimeout { max_connections: 7 },
-            HttpTransportError::Rejected("sub-request admission timeout (all 7 slots busy)".to_owned()),
+            HttpTransportError::Connect("sub-request admission timeout (all 7 slots busy)".to_owned()),
             false,
         ),
         (
@@ -238,12 +240,46 @@ fn every_transport_failure_maps_to_a_verdict_on_delivery() {
 }
 
 #[test]
-fn admission_refusal_is_not_reported_as_a_timeout() {
-    // The request never left the process, so a token exchange must be
-    // free to retry rather than reconcile an unknown mint.
+fn a_starved_call_is_retryable_and_names_the_limit_it_hit() {
+    // Admission exhaustion is transient local backpressure. Reporting it
+    // as `Rejected` would read as a settled refusal, which the engine
+    // never retries at any idempotency level, so a JWKS fetch would
+    // silently lose the retries it asked for.
     let mapped = map_error(&SubRequestError::AdmissionTimeout { max_connections: 1 });
+
+    assert!(
+        !mapped.may_have_reached_peer(),
+        "nothing was sent, so a token exchange must not have to reconcile a mint"
+    );
+    assert!(
+        RetryPolicy::idempotent().should_retry(&mapped),
+        "a JWKS fetch asks for idempotent retries and must actually get them"
+    );
+    assert!(
+        RetryPolicy::undelivered_only().should_retry(&mapped),
+        "an unsent request is safe to repeat even for a token mint"
+    );
+    assert!(
+        mapped.to_string().contains("all 1 slots busy"),
+        "the message must send an operator to the limit, not to the network; got {mapped}"
+    );
+}
+
+#[test]
+fn an_open_circuit_stays_a_refusal_and_is_not_retried() {
+    // The counterpart to the case above: an open circuit recovers on a
+    // window measured in seconds, so repeating it inside one call is
+    // pointless and `Rejected` is the honest verdict.
+    let mapped = map_error(&SubRequestError::CircuitOpen {
+        peer: "10.0.0.1:443".to_owned(),
+    });
+
     assert!(matches!(mapped, HttpTransportError::Rejected(_)));
     assert!(!mapped.may_have_reached_peer());
+    assert!(
+        !RetryPolicy::idempotent().should_retry(&mapped),
+        "retrying an open circuit only feeds it"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +380,56 @@ fn userinfo_is_refused_rather_than_silently_dropped() {
     }
 }
 
+#[test]
+fn the_userinfo_refusal_does_not_repeat_the_credential() {
+    // This refusal fires exactly when the string is known to hold a
+    // secret, and the message reaches a startup log line.
+    let err = Target::parse("https://svc:S3cretPassw0rd@idp.example.com/jwks").unwrap_err();
+    let message = err.to_string();
+    assert!(
+        !message.contains("S3cretPassw0rd"),
+        "the password must not reach a log line; got {message}"
+    );
+    assert!(!message.contains("svc:"), "nor the userinfo it sat in; got {message}");
+    assert!(message.contains("userinfo"), "but it must still say what was wrong");
+}
+
+#[test]
+fn a_port_outside_the_u16_range_is_refused_not_defaulted() {
+    // `port_u16()` answers None both for "no port" and for digits that
+    // overflow, so defaulting the second case would dial 80 while the
+    // Host header still said :99999.
+    for url in [
+        "http://idp.example.com:99999/jwks",
+        "https://idp.example.com:70000/jwks",
+    ] {
+        let err = Target::parse(url).unwrap_err();
+        match err {
+            HttpTransportError::InvalidRequest(message) => {
+                assert!(
+                    message.contains("port"),
+                    "the refusal must name the port for '{url}'; got {message}"
+                );
+            },
+            other => panic!("url '{url}' must be refused, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn port_zero_is_refused() {
+    let err = Target::parse("http://idp.example.com:0/jwks").unwrap_err();
+    assert!(matches!(err, HttpTransportError::InvalidRequest(_)), "got {err:?}");
+}
+
+#[test]
+fn a_bracketed_ipv6_host_without_a_port_still_gets_the_scheme_default() {
+    // The out-of-range check compares authority and host lengths, and a
+    // bracketed host is where that could go wrong.
+    let target = Target::parse("http://[::1]/jwks").unwrap();
+    assert_eq!(target.dial_authority, "[::1]:80");
+}
+
 // ---------------------------------------------------------------------------
 // Peer construction
 // ---------------------------------------------------------------------------
@@ -370,6 +456,34 @@ fn an_explicit_connect_bound_is_kept() {
     let target = Target::parse("https://idp.example.com/jwks").unwrap();
     let peer = target.peer("203.0.113.10:443".parse().unwrap(), Some(Duration::from_millis(250)));
     assert_eq!(peer.options.connection_timeout, Some(Duration::from_millis(250)));
+}
+
+#[test]
+fn a_policy_peer_never_shares_a_pool_entry_with_a_data_plane_peer() {
+    let address: SocketAddr = "203.0.113.10:443".parse().unwrap();
+    let sni = "idp.internal".to_owned();
+
+    // What makes the group key necessary: a peer's reuse hash does not
+    // cover `options.ca`, so a cluster pinning a private CA is
+    // indistinguishable from one using the default trust store.
+    let mut with_ca = HttpPeer::new(address, true, sni.clone());
+    with_ca.options.ca = Some(Arc::from(Vec::new()));
+    let without_ca = HttpPeer::new(address, true, sni.clone());
+    assert_eq!(
+        with_ca.reuse_hash(),
+        without_ca.reuse_hash(),
+        "if these ever differ, the group key below is no longer the thing keeping them apart"
+    );
+
+    // So the policy peer has to be distinguishable some other way.
+    let policy = Target::parse("https://idp.internal/jwks")
+        .unwrap()
+        .peer(address, Some(Duration::from_secs(1)));
+    assert_ne!(
+        policy.reuse_hash(),
+        without_ca.reuse_hash(),
+        "a policy call must not be handed a data-plane connection, or the reverse"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +576,56 @@ async fn a_hostname_resolving_only_to_loopback_is_refused_not_dialled() {
 // ---------------------------------------------------------------------------
 // Limits and deadlines
 // ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resolution_is_charged_against_the_callers_deadline() {
+    // A resolver that outlasts the budget must not become the caller's
+    // problem later: the client's clock only starts once a peer exists, so
+    // nothing else would bound this.
+    let target = Target::parse("https://policy-transport-slow.invalid/jwks").unwrap();
+    let err = transport(true)
+        .resolve_within(&target, Duration::from_nanos(1))
+        .await
+        .expect_err("a budget this small cannot cover a lookup");
+
+    assert!(
+        matches!(err, HttpTransportError::Connect(_)),
+        "an unsent request must stay retry-safe; got {err:?}"
+    );
+    assert!(!err.may_have_reached_peer());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_budget_spent_on_resolution_is_reported_as_unsent_not_as_a_timeout() {
+    // A literal address resolves on the first poll, so the lookup succeeds
+    // even on a zero budget and the exhausted-remainder branch is what
+    // fires. Handing zero to the client instead would surface
+    // `DeadlineExceeded`, which reads as possibly-delivered.
+    let target = Target::parse("http://127.0.0.1:9/jwks").unwrap();
+    let err = transport(true)
+        .resolve_within(&target, Duration::ZERO)
+        .await
+        .expect_err("no budget is left to send anything");
+
+    assert!(
+        matches!(err, HttpTransportError::Connect(_)),
+        "nothing was sent, so this must not look delivered; got {err:?}"
+    );
+    assert!(!err.may_have_reached_peer(), "a token exchange must stay free to retry");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn resolution_leaves_the_rest_of_the_budget_for_the_exchange() {
+    let backend = Backend::spawn(Reply::Keepalive(OK_RESPONSE));
+    let target = Target::parse(&backend.url("/jwks")).unwrap();
+    let budget = Duration::from_secs(5);
+
+    let (address, remaining) = transport(true).resolve_within(&target, budget).await.unwrap();
+
+    assert_eq!(address, backend.address, "the literal address is what gets dialled");
+    assert!(remaining > Duration::ZERO, "a resolved literal leaves budget to spend");
+    assert!(remaining <= budget, "and never more than was granted");
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_successful_exchange_returns_the_status_body_and_headers() {
@@ -651,6 +815,28 @@ fn a_new_transport_holds_no_client_and_has_opened_no_socket() {
         transport.client.get().is_none(),
         "the pool must not bind to the runtime that built the transport"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transport_that_was_never_handed_a_client_builds_its_own_and_dispatches() {
+    // Every other socket-level test injects a client, which skips
+    // `client()` — the one path production actually takes, and the only
+    // reader of the process-wide holder.
+    let backend = Backend::spawn(Reply::Keepalive(OK_RESPONSE));
+    let transport = PolicyHttpTransport::new(true);
+    assert!(transport.client.get().is_none(), "nothing built yet");
+
+    let response = transport
+        .execute(HttpRequest::get(backend.url("/jwks")).timeout(Duration::from_secs(5)))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status, 200);
+    assert!(
+        transport.client.get().is_some(),
+        "the first call must have built the client through client()"
+    );
+    assert_eq!(backend.heads().len(), 1);
 }
 
 #[test]
