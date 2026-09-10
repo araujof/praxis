@@ -44,7 +44,17 @@ const POLICY_PEER_GROUP: u64 = 0x706F_6C69_6379_5F31; // "policy_1"
 /// Performs the policy engine's outbound HTTP over the proxy's connector.
 #[derive(Debug)]
 pub(super) struct PolicyHttpTransport {
-    /// Built on first call from the registered connector.
+    /// The connector registered when this transport was built.
+    ///
+    /// Captured here rather than read on first use. Registration is
+    /// last-wins, and a policy that fetches nothing while its filter is
+    /// being constructed makes its first call at request time — by which
+    /// point a second runtime may have registered its own connector. Reading
+    /// late would hand this transport that runtime's pool, admission limit,
+    /// and breaker.
+    registered: Option<SubRequestConnector>,
+
+    /// Built on first call from [`Self::registered`].
     client: OnceLock<SubRequestClient>,
 
     /// Whether private and loopback destinations are permitted.
@@ -54,15 +64,26 @@ pub(super) struct PolicyHttpTransport {
 impl PolicyHttpTransport {
     /// Build a transport that refuses, or permits, non-public destinations.
     pub(super) fn new(allow_private: bool) -> Self {
+        Self::with_connector(shared_policy_connector(), allow_private)
+    }
+
+    /// Build a transport over `registered`, or over a private pool without one.
+    pub(super) fn with_connector(registered: Option<SubRequestConnector>, allow_private: bool) -> Self {
         Self {
+            registered,
             client: OnceLock::new(),
             allow_private,
         }
     }
 
-    /// The client, built from the registered connector on first call.
+    /// The client, built from the captured connector on first call.
+    ///
+    /// Still lazy: the pool must not open connections on whichever runtime
+    /// happened to construct the transport, since an initialization runtime
+    /// is dropped before the first request arrives. Capturing the connector
+    /// costs nothing — it is a handle, and no socket exists until a call.
     fn client(&self) -> &SubRequestClient {
-        self.client.get_or_init(|| build_client(shared_policy_connector()))
+        self.client.get_or_init(|| build_client(self.registered.clone()))
     }
 
     /// Resolve the destination within `budget` and return the remaining time.

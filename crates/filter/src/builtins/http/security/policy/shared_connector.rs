@@ -132,14 +132,17 @@ mod tests {
         );
     }
 
+    /// Deliberately makes no claim about *which* connector is held.
+    /// Registration is last-wins and this holder is process-wide, so any
+    /// other test building a policy filter can replace it between the write
+    /// and the read. Identity is covered on an owned holder above; what the
+    /// process holder owes is that registering makes one readable at all.
     #[test]
-    fn the_public_setter_and_reader_agree_on_the_process_holder() {
-        let connector = SubRequestConnector::new(4, None);
-        set_policy_subrequest_connector(&connector);
-        let held = shared_policy_connector().expect("a connector is registered now");
+    fn registering_makes_a_connector_readable_from_the_process_holder() {
+        set_policy_subrequest_connector(&SubRequestConnector::new(4, None));
         assert!(
-            std::ptr::eq(held.connector(), connector.connector()),
-            "the reader must see the connector just registered"
+            shared_policy_connector().is_some(),
+            "a registration must leave the reader something to find"
         );
     }
 }

@@ -761,6 +761,34 @@ async fn a_transport_that_was_never_handed_a_client_builds_its_own_and_dispatche
 }
 
 #[test]
+fn a_transport_keeps_the_connector_it_was_built_with() {
+    // The drift this guards: a policy that fetches nothing while its filter
+    // is constructed makes its first call at request time. Registration is
+    // last-wins, so reading the holder then would pick up whatever runtime
+    // registered most recently rather than this transport's own pool.
+    let own = SubRequestConnector::new(8, None);
+    let transport = PolicyHttpTransport::with_connector(Some(own.clone()), true);
+
+    // Stand in for a second runtime registering after construction.
+    super::super::set_policy_subrequest_connector(&SubRequestConnector::new(1, None));
+
+    assert!(
+        std::ptr::eq(transport.client().connector().connector(), own.connector()),
+        "the pool must be the one captured at construction, not the newest registration"
+    );
+}
+
+#[test]
+fn a_transport_built_without_a_registration_falls_back() {
+    let transport = PolicyHttpTransport::with_connector(None, true);
+    assert!(transport.client.get().is_none(), "nothing built before first use");
+    // Exercising `client()` takes the fallback branch rather than reading
+    // whatever the process holder happens to contain.
+    let _client = transport.client();
+    assert!(transport.client.get().is_some());
+}
+
+#[test]
 fn the_registered_connector_is_the_one_policy_calls_use() {
     let shared = SubRequestConnector::new(16, None);
     let client = build_client(Some(shared.clone()));
