@@ -114,7 +114,7 @@ impl FilteredStreamingBody {
             cluster_retry_state_released: false,
             endpoint_reselector: None,
             pinned_endpoint_address: None,
-            session_stores: None,
+            session_stores: cont.pipeline.session_stores(),
             structured_metadata: std::mem::take(&mut cont.structured_metadata),
             subrequest_client: cont.pipeline.subrequest_client(),
             subrequest_response_mode: crate::context::SubRequestResponseMode::Streaming,
@@ -300,5 +300,178 @@ impl StreamingResponseBody for FilteredStreamingBody {
 
     fn swap_extensions(&mut self, extensions: &mut RequestExtensions) {
         self.exchange_extensions(extensions);
+    }
+}
+
+/// Single-round streaming body handed back to an application callout.
+///
+/// Wraps [`FilteredStreamingBody`] and closes the two gaps a bare wrapper would
+/// leave for a caller that only pulls [`next_chunk`](StreamingResponseBody::next_chunk):
+///
+/// - At upstream EOF the inner body withholds its completion output (a terminal SSE event, a closing bracket) in favor
+///   of `into_finished_parts`. This adapter drains and emits it before yielding the terminal `None`, so the chain's
+///   last bytes are not silently dropped.
+/// - An upstream termination the chain did not convert into a valid terminal sequence is surfaced as an error after
+///   already-emitted chunks drain, rather than passing off a truncated stream as a clean end.
+///
+/// It also enforces the callout's response byte ceiling across emitted chunks.
+/// This is the single-step analog of the iterative request router's
+/// `IrrStreamingSession`; it has no transitions because a callout runs exactly
+/// one bound chain.
+pub(crate) struct CalloutStreamingBody {
+    /// Active upstream-backed body; `None` once completion has been drained.
+    inner: Option<FilteredStreamingBody>,
+    /// Completion chunks queued ahead of the terminal `None`.
+    pending: VecDeque<Bytes>,
+    /// Extensions recovered after `inner` is consumed, for `swap_extensions`.
+    held_extensions: Option<RequestExtensions>,
+    /// Error surfaced after `pending` drains (unhandled termination).
+    deferred_error: Option<FilterError>,
+    /// Cumulative emitted bytes, checked against `max_response_bytes`.
+    emitted_bytes: usize,
+    /// Response byte ceiling for the logical stream.
+    max_response_bytes: usize,
+    /// Whether the terminal `None` has been reached.
+    finished: bool,
+}
+
+impl CalloutStreamingBody {
+    /// Wrap an opened streaming body with completion flushing and a byte ceiling.
+    pub(crate) fn new(inner: FilteredStreamingBody, max_response_bytes: usize) -> Self {
+        Self {
+            inner: Some(inner),
+            pending: VecDeque::new(),
+            held_extensions: None,
+            deferred_error: None,
+            emitted_bytes: 0,
+            max_response_bytes,
+            finished: false,
+        }
+    }
+
+    /// Account one outgoing chunk against the response byte ceiling, ending the
+    /// stream if it does not fit.
+    ///
+    /// A breach is *terminal*. The rejected chunk is never emitted, so
+    /// `emitted_bytes` does not advance; without marking the stream finished a
+    /// caller that polled again would resume around the hole and keep delivering
+    /// later chunks against the stale count, handing the consumer a body with a
+    /// gap in it instead of an error-terminated stream. Marking it finished and
+    /// dropping queued chunks makes the next poll report end-of-stream, matching
+    /// the `deferred_error` arm of [`next_chunk`](CalloutStreamingBody::next_chunk).
+    ///
+    /// The inner body is deliberately left in place: tearing it down here would
+    /// have to drop the upstream synchronously, whereas a subsequent
+    /// [`cancel`](CalloutStreamingBody::cancel) or
+    /// [`suppress`](CalloutStreamingBody::suppress) can still cancel it
+    /// asynchronously and recover the parent extensions.
+    fn checked(&mut self, chunk: Bytes) -> Result<Option<Bytes>, FilterError> {
+        let outcome = self.account(chunk);
+        if outcome.is_err() {
+            self.finished = true;
+            self.pending.clear();
+        }
+        outcome
+    }
+
+    /// Add `chunk` to the emitted-byte total, rejecting a counter overflow or a
+    /// breach of the response ceiling.
+    fn account(&mut self, chunk: Bytes) -> Result<Option<Bytes>, FilterError> {
+        let total = self
+            .emitted_bytes
+            .checked_add(chunk.len())
+            .ok_or_else(|| -> FilterError { "filtered_subrequest: stream byte count overflow".into() })?;
+        if total > self.max_response_bytes {
+            return Err("filtered_subrequest: streaming response exceeds configured body limit"
+                .to_owned()
+                .into());
+        }
+        self.emitted_bytes = total;
+        Ok(Some(chunk))
+    }
+
+    /// Consume the inner body at EOF, queueing completion output or recording an
+    /// unhandled termination to surface after buffered chunks drain.
+    fn drain_completion(&mut self) -> Result<(), FilterError> {
+        let (continuation, completion_output) = self
+            .inner
+            .take()
+            .ok_or_else(|| -> FilterError { "filtered_subrequest: streaming body already consumed".into() })?
+            .into_finished_parts();
+        let completion = continuation.into_completion();
+        self.held_extensions = Some(completion.extensions);
+        if let Some(termination) = completion.termination.as_ref().filter(|t| !t.is_handled()) {
+            let cause = termination.cause();
+            self.deferred_error =
+                Some(format!("filtered_subrequest: unhandled upstream stream termination: {cause:?}").into());
+            return Ok(());
+        }
+        self.pending.extend(completion.pending_chunks);
+        self.pending.extend(completion_output.filter(|bytes| !bytes.is_empty()));
+        self.finished = true;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl StreamingResponseBody for CalloutStreamingBody {
+    async fn next_chunk(&mut self) -> Result<Option<Bytes>, FilterError> {
+        loop {
+            if let Some(chunk) = self.pending.pop_front() {
+                return self.checked(chunk);
+            }
+            if let Some(error) = self.deferred_error.take() {
+                self.finished = true;
+                self.inner = None;
+                return Err(error);
+            }
+            if self.finished {
+                return Ok(None);
+            }
+            let inner = self
+                .inner
+                .as_mut()
+                .ok_or_else(|| -> FilterError { "filtered_subrequest: streaming body has no active source".into() })?;
+            match inner.next_chunk().await? {
+                Some(chunk) => return self.checked(chunk),
+                None => self.drain_completion()?,
+            }
+        }
+    }
+
+    async fn suppress(&mut self) -> Result<(), FilterError> {
+        self.pending.clear();
+        self.deferred_error = None;
+        // Recover the parent extensions before propagating any completion error:
+        // the completion lifecycle writes them back into the continuation even
+        // when a body filter rejects, so `held_extensions` must be populated on
+        // every path out (matching `cancel` and `drain_completion`).
+        let outcome = if let Some(mut inner) = self.inner.take() {
+            let result = inner.suppress().await;
+            self.held_extensions = Some(inner.into_continuation().into_parent_extensions());
+            result
+        } else {
+            Ok(())
+        };
+        self.finished = true;
+        outcome
+    }
+
+    async fn cancel(&mut self) {
+        self.pending.clear();
+        self.deferred_error = None;
+        if let Some(mut inner) = self.inner.take() {
+            inner.cancel().await;
+            self.held_extensions = Some(inner.into_continuation().into_parent_extensions());
+        }
+        self.finished = true;
+    }
+
+    fn swap_extensions(&mut self, extensions: &mut RequestExtensions) {
+        if let Some(inner) = self.inner.as_mut() {
+            inner.swap_extensions(extensions);
+        } else if let Some(held) = self.held_extensions.as_mut() {
+            std::mem::swap(held, extensions);
+        }
     }
 }
