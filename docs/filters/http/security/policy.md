@@ -19,6 +19,8 @@ On the body phase, the filter consumes protocol classifier filter metadata (from
 
 Outbound policy calls share the proxy's sub-request limits and circuit breaker, use HTTP/1.1, and keep a separate 1 MiB response ceiling. TLS uses the platform trust store; cluster private CAs and client certificates do not apply. Private destinations require `allow_private_idp`.
 
+An endpoint URL may name an IP address over `http`, but not over `https`: an IP carries no SNI, and Pingora peers skip certificate verification entirely when SNI is empty. Use a hostname for `https`.
+
 Praxis filter configs are flat: the filter's typed fields sit directly under the `- filter:` entry alongside the structural keys (`name`, `conditions`), not nested under a `config:` wrapper. See `examples/configs/security/policy.yaml` for a runnable example.
 
 The referenced YAML is the policy document — plugins, routes, and identity-source declarations. The filter loads it once at construction and rejects misconfigured policy at server startup (fail-fast rather than at first request).

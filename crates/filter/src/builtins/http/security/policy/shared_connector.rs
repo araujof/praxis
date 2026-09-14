@@ -37,6 +37,11 @@ fn policy_connector() -> &'static ConnectorHolder {
 ///
 /// Registration is process-wide and last-wins. Call immediately before
 /// building pipelines.
+///
+/// Because it is process-wide, two runtimes building pipelines *concurrently*
+/// in one process can cross-wire their pools: each registers, and whichever
+/// registered last is what the other's filters capture. Build them one at a
+/// time. A single server, including across hot reloads, is unaffected.
 pub fn set_policy_subrequest_connector(connector: &SubRequestConnector) {
     policy_connector().set(connector);
 }

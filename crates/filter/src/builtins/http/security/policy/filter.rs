@@ -106,6 +106,10 @@ enum GatedIdentity {
 /// certificates do not apply. Private destinations require
 /// `allow_private_idp`.
 ///
+/// An endpoint URL may name an IP address over `http`, but not over
+/// `https`: an IP carries no SNI, and Pingora peers skip certificate
+/// verification entirely when SNI is empty. Use a hostname for `https`.
+///
 /// # YAML configuration
 ///
 /// Filter fields sit directly under the `- filter:` entry; there is no
