@@ -21,7 +21,6 @@ Full documentation index: [docs/README.md](docs/README.md)
 
 - [Configuration](docs/operating/configuration.md)
 - [Features](docs/features.md)
-- [AI Features](https://github.com/praxis-proxy/ai)
 - [Filters](docs/filters/README.md)
 - [Extensions](docs/filters/extensions.md)
 - [TLS](docs/operating/tls.md)
@@ -42,14 +41,11 @@ with the following documentation first:
 - [Development](docs/developing/getting-started.md)
 - [Benchmarks](docs/benchmarks.md)
 
-For larger changes, open a [discussion] and follow the
-[proposal process].
+For larger changes, follow the [proposal process].
 
-We have a Slack channel for the project on [CNCF Slack],
-please join us in the [#praxis] channel there.
+Please join us in our Slack channel on [CNCF Slack]: [#praxis] channel.
 
-All participants are expected to follow the
-[Code of Conduct](CODE_OF_CONDUCT.md).
+Everyone is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 [Issues]:https://github.com/praxis-proxy/praxis/issues/new
 [pull requests]:https://github.com/praxis-proxy/praxis/compare
@@ -57,7 +53,3 @@ All participants are expected to follow the
 [CNCF Slack]:https://slack.cncf.io
 [#praxis]:https://cloud-native.slack.com/archives/C0BK0RSP5RC
 [proposal process]:https://github.com/praxis-proxy/enhancements
-
-## License
-
-Apache 2.0

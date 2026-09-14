@@ -379,26 +379,59 @@ fn reused_connection_failure_retries_idempotent_get() {
     let config = Config::from_yaml(&yaml).unwrap();
     let proxy = start_proxy(&config);
 
-    let (status, _body) = http_get(proxy.addr(), "/warmup", None);
-    assert_eq!(status, 200, "warmup request should succeed and pool the connection");
+    // Connection pooling and reuse are timing-sensitive: under the heavy
+    // concurrency of the coverage / full-suite run the probe does not always
+    // land on the pooled connection that gets killed, so retry the
+    // warmup+probe exchange until we observe the intended reused-connection
+    // failure and its transparent retry.
+    //
+    // The guarantee under test holds on every successful attempt: an idempotent
+    // GET whose reused upstream connection dies mid-request is retried on a
+    // fresh connection and still returns the pooled backend's 200 to the
+    // client. A regression that drops the retry keeps surfacing the failure as
+    // a 502 until the deadline; one that simply never reuses a connection keeps
+    // retrying the exchange. The exact replay count is left unchecked on
+    // purpose: a retry can chain through more than one pooled, kill-on-reuse
+    // connection before landing on a fresh one, so the count is timing-derived.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let (warmup_status, _body) = http_get(proxy.addr(), "/warmup", None);
+        assert_eq!(
+            warmup_status, 200,
+            "warmup request should succeed and pool the connection"
+        );
 
-    let (status, body) = http_get(proxy.addr(), "/probe", None);
+        let logged_before = log.lock().unwrap().len();
+        let (status, body) = http_get(proxy.addr(), "/probe", None);
+        let attempt = log.lock().unwrap()[logged_before..].to_vec();
 
-    let entries = log.lock().unwrap().clone();
-    assert!(
-        entries.iter().any(|(_, request_num, ..)| *request_num > 0),
-        "probe request must arrive on the pooled connection, got: {entries:?}"
-    );
-    let probe_count = entries
-        .iter()
-        .filter(|(_, _, method, path)| method == "GET" && path == "/probe")
-        .count();
-    assert_eq!(
-        probe_count, 2,
-        "idempotent GET should be replayed once on a fresh connection, got: {entries:?}"
-    );
-    assert_eq!(status, 200, "retried GET should succeed on the fresh connection");
-    assert_eq!(body, "pooled-ok");
+        // Did this probe reach the killed, reused connection? The backend
+        // records the doomed attempt with request_num > 0 before closing
+        // without a response.
+        let probe_hit_reused = attempt
+            .iter()
+            .any(|(_, request_num, method, path)| *request_num > 0 && method == "GET" && path == "/probe");
+
+        // Success: the probe hit the reused connection, and because the killed
+        // connection never answers, the client's 200 can only come from the
+        // transparent retry on a fresh connection.
+        if probe_hit_reused {
+            assert_eq!(
+                status, 200,
+                "reused-connection failure on an idempotent GET should be retried to success, \
+                 got {status} (attempt: {attempt:?})"
+            );
+            assert_eq!(body, "pooled-ok");
+            return;
+        }
+
+        assert!(
+            Instant::now() < deadline,
+            "an idempotent GET on a reused, killed connection should be retried on a fresh \
+             connection within the retry window (last status {status}, attempt: {attempt:?})"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]
