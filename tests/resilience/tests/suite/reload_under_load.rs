@@ -99,6 +99,10 @@ fn reload_under_load_every_response_from_one_generation() {
 /// swap: intermediate configs are never served, the final one is, and
 /// the proxy keeps answering throughout.
 #[test]
+#[cfg_attr(
+    coverage,
+    ignore = "debounce window is timing-sensitive under llvm-cov instrumentation"
+)]
 fn rapid_rewrites_debounce_to_final_config() {
     let backend = start_backend_with_shutdown("origin");
     let proxy_port = free_port();
