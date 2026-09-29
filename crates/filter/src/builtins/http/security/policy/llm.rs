@@ -89,6 +89,11 @@ impl ParsedLlmRequest {
             push_text(&mut parts, prompt);
         }
 
+        // Responses and embeddings carry the prompt in `input`.
+        if let Some(input) = self.0.get("input") {
+            push_input_text(&mut parts, input);
+        }
+
         parts
     }
 
@@ -140,6 +145,50 @@ fn push_text(parts: &mut Vec<ContentPart>, value: &serde_json::Value) {
                         }
                     },
                     _ => {},
+                }
+            }
+        },
+        _ => {},
+    }
+}
+
+/// Content part types that carry prompt text in an `input` item.
+const INPUT_TEXT_TYPES: &[&str] = &["input_text", "text", "output_text"];
+
+/// Append text from a Responses or embeddings `input`.
+///
+/// Token-ID arrays, non-message items and non-text parts are skipped.
+fn push_input_text(parts: &mut Vec<ContentPart>, input: &serde_json::Value) {
+    match input {
+        serde_json::Value::String(_) => push_text(parts, input),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                match item {
+                    serde_json::Value::String(_) => push_text(parts, item),
+                    serde_json::Value::Object(_) => push_input_item_text(parts, item),
+                    _ => {},
+                }
+            }
+        },
+        _ => {},
+    }
+}
+
+/// Append text from one message item of an `input` array.
+fn push_input_item_text(parts: &mut Vec<ContentPart>, item: &serde_json::Value) {
+    if item.get("type").is_some_and(|kind| kind.as_str() != Some("message")) {
+        return;
+    }
+    match item.get("content") {
+        Some(content @ serde_json::Value::String(_)) => push_text(parts, content),
+        Some(serde_json::Value::Array(content)) => {
+            for part in content {
+                let text_part = match part.get("type") {
+                    Some(kind) => kind.as_str().is_some_and(|kind| INPUT_TEXT_TYPES.contains(&kind)),
+                    None => true,
+                };
+                if let Some(text @ serde_json::Value::String(_)) = part.get("text").filter(|_| text_part) {
+                    push_text(parts, text);
                 }
             }
         },
@@ -471,11 +520,69 @@ mod tests {
     }
 
     #[test]
-    fn embeddings_request_has_a_model_and_no_prompt_text() {
+    fn embeddings_string_input_is_projected() {
         let parsed = request(r#"{"model":"text-embedding-3-small","input":"hello"}"#);
         assert_eq!(parsed.model(), Some("text-embedding-3-small"));
-        assert!(parsed.content().is_empty());
+        assert_eq!(
+            texts(&parsed.content()),
+            vec!["hello"],
+            "a string `input` is prompt text a policy must be able to read",
+        );
         assert!(parsed.as_value().is_object());
+    }
+
+    #[test]
+    fn builds_content_from_responses_input_text_parts() {
+        let parsed =
+            request(r#"{"model":"gpt-4o","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}"#);
+        assert_eq!(texts(&parsed.content()), vec!["hi"]);
+    }
+
+    #[test]
+    fn token_id_input_projects_nothing() {
+        for body in [
+            r#"{"model":"m","input":[1,2,3]}"#,
+            r#"{"model":"m","input":[[1,2,3]]}"#,
+            r#"{"model":"m","input":[[1,2],[3]]}"#,
+        ] {
+            assert!(request(body).content().is_empty(), "token IDs are not text: {body}");
+        }
+    }
+
+    #[test]
+    fn non_text_input_parts_are_skipped() {
+        let parsed = request(
+            r#"{"model":"m","input":[{"role":"user","content":[
+                 {"type":"input_text","text":"describe"},
+                 {"type":"input_image","image_url":"http://x/y.png","text":"hidden"},
+                 {"type":"input_file","file_id":"f1"},
+                 {"type":"output_text","text":"earlier"}]}]}"#,
+        );
+        assert_eq!(texts(&parsed.content()), vec!["describe", "earlier"]);
+    }
+
+    #[test]
+    fn non_message_input_items_are_skipped() {
+        let parsed = request(
+            r#"{"model":"m","input":[
+                 {"type":"function_call","call_id":"c1","name":"f","arguments":"{\"q\":\"x\"}"},
+                 {"type":"function_call_output","call_id":"c1","output":"result"},
+                 {"type":"message","role":"user","content":"next"}]}"#,
+        );
+        assert_eq!(
+            texts(&parsed.content()),
+            vec!["next"],
+            "only message items carry prompt text",
+        );
+    }
+
+    #[test]
+    fn string_input_items_mix_with_message_items() {
+        let parsed = request(
+            r#"{"model":"m","input":["first",{"role":"user","content":"second"},
+                 {"role":"user","content":[{"text":"third"}]}]}"#,
+        );
+        assert_eq!(texts(&parsed.content()), vec!["first", "second", "third"]);
     }
 
     #[test]
