@@ -66,6 +66,10 @@
 //! Bodyless requests remain subject to identity policy but skip inference
 //! routing. APIs that identify the model only in the URL are unsupported.
 //!
+//! OPA, CEL, and Cedar steps also read the parsed body as `llm.request`.
+//! The body is parsed once and moved to the engine without a copy, and the
+//! upstream receives the original bytes on allow.
+//!
 //! See `examples/configs/security/policy-llm.yaml`.
 //!
 //! With `body_access: read_write`, `cmf.llm_output` evaluates non-streaming

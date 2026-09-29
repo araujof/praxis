@@ -97,10 +97,9 @@ impl ParsedLlmRequest {
         parts
     }
 
-    /// The parsed document, for a caller that needs the raw shape.
-    #[cfg(test)]
-    pub(super) fn as_value(&self) -> &serde_json::Value {
-        &self.0
+    /// Consume the request, yielding the parsed document without a copy.
+    pub(super) fn into_value(self) -> serde_json::Value {
+        self.0
     }
 }
 
@@ -528,7 +527,7 @@ mod tests {
             vec!["hello"],
             "a string `input` is prompt text a policy must be able to read",
         );
-        assert!(parsed.as_value().is_object());
+        assert!(parsed.into_value().is_object());
     }
 
     #[test]
