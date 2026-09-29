@@ -126,17 +126,23 @@ enum GatedIdentity {
 /// top-level `model`, no JSON-RPC envelope, and no `mcp.method` metadata.
 /// Other requests carry none. CEL and Cedar deny when a rule reads it, and
 /// so does an OPA boolean or object decision, but an OPA deny set needs its
-/// own guard. The body is parsed once and handed to the engine without a
-/// copy; on allow the upstream receives the original bytes. A body over
-/// `llm.max_request_bytes` receives HTTP 413 before any authorization rule
-/// runs. Policy judges the body as it reaches this filter, so order
+/// own guard. On allow the upstream receives the original bytes. A body
+/// over `llm.max_request_bytes` receives HTTP 413 before any authorization
+/// rule runs. Policy judges the body as it reaches this filter, so order
 /// body-rewriting filters before `policy`.
 /// For rule syntax, engine types, and absent-value behavior, see
-/// [Structured request input](https://github.com/praxis-proxy/policy/blob/main/docs/content/apl/pdp.md#structured-request-input)
-/// in the policy engine docs.
+/// [Structured request input] in the policy engine docs.
+///
+/// A body that repeats a key within one JSON object, at any depth,
+/// receives HTTP 400 with violation code `llm.duplicate_key` before any
+/// authorization rule runs, since backends disagree on which copy wins.
+/// The response names neither the key nor any value. A body that is not
+/// valid JSON is not refused for being malformed: it carries no usable
+/// `model`, so it is handled like any other body without one.
 ///
 /// The CMF prompt text that APL steps and scanners read is projected from
-/// `system`, `messages[].content`, legacy `prompt`, and `input`. For
+/// `system`, Responses `instructions`, `messages[].content`, legacy
+/// `prompt`, and `input`. For
 /// Responses and embeddings `input`, only text counts: a string, string
 /// items, and `input_text`, `text`, or `output_text` parts of message
 /// items. Token-ID arrays, images, and tool outputs are skipped.
@@ -166,6 +172,8 @@ enum GatedIdentity {
 /// An endpoint URL may name an IP address over `http`, but not over
 /// `https`: an IP carries no SNI, and Pingora peers skip certificate
 /// verification entirely when SNI is empty. Use a hostname for `https`.
+///
+/// [Structured request input]: https://github.com/praxis-proxy/policy/blob/main/docs/content/apl/pdp.md#structured-request-input
 ///
 /// # YAML configuration
 ///
@@ -1458,6 +1466,16 @@ fn oversized_body_rejection() -> Rejection {
         .with_body(llm_error_envelope_bytes_within(Some(&violation), usize::MAX))
 }
 
+/// Build an HTTP 400 rejection for an inference request that repeats a
+/// JSON object key. The body names neither the key nor any value.
+fn duplicate_key_rejection() -> Rejection {
+    let violation = PluginViolation::new("llm.duplicate_key", "inference request body repeats a JSON object key");
+    Rejection::status(400)
+        .with_header(VIOLATION_HEADER, violation.code.clone())
+        .with_header("Content-Type", "application/json")
+        .with_body(llm_error_envelope_bytes_within(Some(&violation), usize::MAX))
+}
+
 /// Build an unmatched inference route violation.
 fn no_route_violation() -> PluginViolation {
     PluginViolation::new("llm.no_route", "no policy route permits this model")
@@ -1638,10 +1656,21 @@ impl HttpFilter for PolicyFilter {
                 return self.complete_gated_admission(ctx).await;
             }
 
-            // A JSON-RPC envelope belongs to the classifier, not inference.
-            let parsed = self
+            // A repeated key makes the body mean different things to
+            // different parsers, so no policy can judge it.
+            let Ok(parsed) = self
                 .llm_routes
-                .then(|| ParsedLlmRequest::parse(body.as_ref().unwrap_or(&EMPTY_BODY)));
+                .then(|| ParsedLlmRequest::parse(body.as_ref().unwrap_or(&EMPTY_BODY)))
+                .transpose()
+            else {
+                tracing::debug!(
+                    target: "policy.filter",
+                    "inference request body repeats a JSON object key; denying (fail-closed)",
+                );
+                return Ok(FilterAction::Reject(duplicate_key_rejection()));
+            };
+
+            // A JSON-RPC envelope belongs to the classifier, not inference.
             let carries_envelope = parsed.as_ref().is_some_and(ParsedLlmRequest::carries_json_rpc_envelope);
 
             if let Some(parsed) = parsed {
@@ -1693,7 +1722,7 @@ impl HttpFilter for PolicyFilter {
 
         // Refuse conflicting coordinates rather than choose the wrong policy.
         if self.llm_routes
-            && ParsedLlmRequest::parse(body.as_ref().unwrap_or(&EMPTY_BODY))
+            && ParsedLlmRequest::parse_last_wins(body.as_ref().unwrap_or(&EMPTY_BODY))
                 .model()
                 .is_some()
         {

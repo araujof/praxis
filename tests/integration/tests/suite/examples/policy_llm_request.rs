@@ -130,6 +130,17 @@ fn chat_body(model: &str, tools: &[&str]) -> String {
     .to_string()
 }
 
+/// A Chat Completions body for `model` using the legacy `functions` list.
+fn legacy_functions_body(model: &str, functions: &[&str]) -> String {
+    let functions: Vec<_> = functions.iter().map(|name| serde_json::json!({"name": name})).collect();
+    serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "pay the invoice"}],
+        "functions": functions,
+    })
+    .to_string()
+}
+
 /// A Responses body whose `input` is one user message and whose tools are flat.
 fn responses_body(tools: &[&str]) -> String {
     let tools: Vec<_> = tools
@@ -231,4 +242,44 @@ fn an_oversized_body_is_rejected_before_policy_or_upstream() {
 
     assert_eq!(parse_status(&raw), 413, "raw response:\n{raw}");
     assert_backend_untouched(&backend);
+}
+
+#[test]
+fn legacy_functions_are_guarded_like_tools() {
+    for model in ["chat-cel", "chat-opa"] {
+        assert_denied_unforwarded(
+            "/v1/chat/completions",
+            &legacy_functions_body(model, &["lookup", "transfer_funds"]),
+        );
+        assert_forwarded_unchanged(
+            "/v1/chat/completions",
+            &legacy_functions_body(model, &["lookup", "weather"]),
+        );
+    }
+}
+
+#[test]
+fn a_body_repeating_a_key_is_rejected_before_policy_or_upstream() {
+    for body in [
+        r#"{"model":"chat-cel","tools":[{"type":"function","function":{"name":"transfer_funds"}}],"tools":[]}"#,
+        r#"{"model":"chat-opa","tools":[{"type":"function","function":{"name":"lookup","name":"transfer_funds"}}]}"#,
+        r#"{"model":"chat-cel","model":"chat-opa","messages":[]}"#,
+    ] {
+        let backend = start_probe_backend();
+        let proxy_port = free_port();
+        let proxy = start_proxy(&load_example(proxy_port, backend.port(), None));
+
+        let raw = post_json(proxy.addr(), "/v1/chat/completions", body);
+        assert_eq!(parse_status(&raw), 400, "body {body}; raw response:\n{raw}");
+        assert_eq!(
+            parse_header(&raw, "x-policy-violation").as_deref(),
+            Some("llm.duplicate_key"),
+            "raw response:\n{raw}",
+        );
+        assert!(
+            !parse_body(&raw).contains("transfer_funds"),
+            "the rejection must not echo request content; raw response:\n{raw}",
+        );
+        assert_backend_untouched(&backend);
+    }
 }

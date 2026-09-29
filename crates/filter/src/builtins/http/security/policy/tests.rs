@@ -5088,7 +5088,7 @@ async fn assert_tool_guard(guard: &str) {
     let FilterAction::Reject(rejection) = action else {
         panic!("a forbidden tool in second position must be denied; got {action:?}");
     };
-    assert_eq!(rejection.status, 403);
+    assert_eq!(rejection.status, 403, "a policy deny on an inference route is a 403");
 
     let action = dispatch_inference_as(&filter, "alice", PERMITTED_TOOLS).await;
     assert!(
@@ -5105,6 +5105,121 @@ async fn a_cel_policy_reads_the_request_tools() {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_opa_policy_reads_the_request_tools() {
     assert_tool_guard(OPA_TOOL_GUARD).await;
+}
+
+/// Cedar guard that refuses a `transfer_funds` tool anywhere in `tools`.
+///
+/// Set `contains` matches whole records, so the forbidden entry is spelled
+/// exactly as the request carries it.
+const CEDAR_TOOL_GUARD: &str = r#"  pdp:
+    - kind: cedar-direct
+      policy_text: |
+        @id("allow-all")
+        permit(principal, action, resource);
+        @id("no-transfer-funds")
+        forbid(principal, action, resource)
+        when {
+            !(context has llm && context.llm has request) ||
+            (context.llm.request has tools &&
+             context.llm.request.tools.contains(
+                 {"type": "function", "function": {"name": "transfer_funds"}}))
+        };
+routes:
+  - llm: "*"
+    authorization:
+      pre_invocation:
+        - cedar:
+            action: 'Action::"infer"'
+            resource:
+              type: Model
+              id: m
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cedar_policy_reads_the_request_tools() {
+    assert_tool_guard(CEDAR_TOOL_GUARD).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cedar_policy_reads_the_request_model() {
+    let guard = r#"  pdp:
+    - kind: cedar-direct
+      policy_text: |
+        permit(principal, action, resource)
+        when { context.llm.request.model == "gpt-4o" };
+routes:
+  - llm: "*"
+    authorization:
+      pre_invocation:
+        - cedar:
+            action: 'Action::"infer"'
+            resource:
+              type: Model
+              id: any
+"#;
+    let (_dir, path) = write_llm_structured_config(guard);
+    let filter = build_filter(path);
+
+    let action = dispatch_inference_as(&filter, "alice", r#"{"model":"gpt-4o-mini","messages":[]}"#).await;
+    let FilterAction::Reject(rejection) = action else {
+        panic!("a model the Cedar rule does not name must be denied; got {action:?}");
+    };
+    assert_eq!(rejection.status, 403, "a Cedar deny on an inference route is a 403");
+
+    let action = dispatch_inference_as(&filter, "alice", r#"{"model":"gpt-4o","messages":[]}"#).await;
+    assert!(
+        matches!(action, FilterAction::BodyDone),
+        "the model the Cedar rule names must be admitted; got {action:?}",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_body_repeating_a_key_is_rejected_before_structured_policy_runs() {
+    let (_dir, path) = write_llm_structured_config(CEL_TOOL_GUARD);
+    let filter = build_filter(path);
+
+    for body in [
+        r#"{"model":"m","tools":[{"type":"function","function":{"name":"transfer_funds"}}],"tools":[]}"#,
+        r#"{"model":"m","tools":[{"type":"function","function":{"name":"lookup","name":"transfer_funds"}}]}"#,
+        r#"{"model":"m","model":"m"}"#,
+    ] {
+        let action = dispatch_inference_as(&filter, "alice", body).await;
+        let FilterAction::Reject(rejection) = action else {
+            panic!("body {body} repeats a key and must be rejected; got {action:?}");
+        };
+        assert_eq!(
+            rejection.status, 400,
+            "a repeated key is a malformed request, not a policy deny"
+        );
+        assert!(
+            has_header(&rejection, "x-policy-violation", "llm.duplicate_key"),
+            "the duplicate check answers, not the policy; got {:?}",
+            rejection.headers,
+        );
+        let served = String::from_utf8_lossy(rejection.body.as_deref().unwrap_or_default()).into_owned();
+        for echoed in ["tools", "name", "model", "transfer_funds", "lookup"] {
+            assert!(
+                !served.contains(&format!("\"{echoed}\"")) && !served.contains(&format!("`{echoed}`")),
+                "the deny body must not echo `{echoed}` from body {body}; got {served}",
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_malformed_body_is_not_reported_as_a_duplicate_key() {
+    let (_dir, path) = write_llm_structured_config(CEL_TOOL_GUARD);
+    let filter = build_filter(path);
+
+    let action = dispatch_inference_as(&filter, "alice", r#"{"model":"m","model""#).await;
+    let FilterAction::Reject(rejection) = action else {
+        panic!("a malformed body carries no model and must be denied; got {action:?}");
+    };
+    assert!(
+        has_header(&rejection, "x-policy-violation", "llm.model_missing"),
+        "malformed JSON keeps its existing outcome; got {:?}",
+        rejection.headers,
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -5148,7 +5263,10 @@ async fn an_oversized_body_is_rejected_before_structured_policy_runs() {
     let FilterAction::Reject(rejection) = action else {
         panic!("a body past the ceiling must be rejected; got {action:?}");
     };
-    assert_eq!(rejection.status, 413);
+    assert_eq!(
+        rejection.status, 413,
+        "an oversized body is refused as too large, not as a policy deny"
+    );
     assert!(
         has_header(&rejection, "x-policy-violation", "llm.body_too_large"),
         "the size gate answers, not the policy; got {:?}",

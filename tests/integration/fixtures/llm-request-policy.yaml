@@ -30,7 +30,9 @@ global:
 
           default allow := false
 
-          # Chat Completions tools nest the name under `function`.
+          # A deny-list must cover every field the backend accepts.
+          # Chat Completions tools nest the name under `function`, and
+          # the legacy `functions` list carries it directly.
           allow if {
               input.llm.request
               not forbidden_tool
@@ -41,15 +43,23 @@ global:
               t.function.name == "transfer_funds"
           }
 
+          forbidden_tool if {
+              some f in input.llm.request.functions
+              f.name == "transfer_funds"
+          }
+
 routes:
-  # Chat Completions, guarded in CEL.
+  # Chat Completions, guarded in CEL. A deny-list must cover every field
+  # the backend accepts, so the legacy `functions` list is checked too.
   - llm: chat-cel
     authorization:
       pre_invocation:
         - cel:
             expr: >-
-              !has(llm.request.tools) ||
-              llm.request.tools.all(t, t.function.name != "transfer_funds")
+              (!has(llm.request.tools) ||
+              llm.request.tools.all(t, t.function.name != "transfer_funds")) &&
+              (!has(llm.request.functions) ||
+              llm.request.functions.all(f, f.name != "transfer_funds"))
 
   # Chat Completions, guarded in OPA.
   - llm: chat-opa
